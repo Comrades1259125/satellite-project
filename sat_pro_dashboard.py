@@ -1,42 +1,35 @@
 import streamlit as st
 import plotly.graph_objects as go
+from geopy.geocoders import Nominatim # <--- ตัวเชื่อมฐานข้อมูลภายนอก
 import pandas as pd
 import numpy as np
 import random
-import string
 from datetime import datetime, timezone
-from fpdf import FPDF 
-from pypdf import PdfReader, PdfWriter
-import qrcode
-from io import BytesIO
 from skyfield.api import load, wgs84
 
 # ==========================================
-# 1. CORE DATA & GEOLOCATION DATABASE
+# 1. EXTERNAL DATABASE ENGINE (Geopy)
 # ==========================================
-# ฐานข้อมูลพิกัดแบบ Manual สำหรับสถานีภาคพื้นดิน
-GEO_DB = {
-    "BANGKOK": {"lat": 13.7563, "lon": 100.5018},
-    "PHRA NAKHON": {"lat": 13.7589, "lon": 100.4974},
-    "PATHUM WAN": {"lat": 13.7367, "lon": 100.5231},
-    "CHATTUCHAK": {"lat": 13.8285, "lon": 100.5597},
-    "CHIANG MAI": {"lat": 18.7883, "lon": 98.9853},
-    "CHONBURI": {"lat": 13.3611, "lon": 100.9847},
-    "KHON KAEN": {"lat": 16.4322, "lon": 102.8236},
-    "PHUKET": {"lat": 7.8804, "lon": 98.3922}
-}
-
-def get_real_coords(dist, prov):
-    # พยายามหาจากชื่อเขตก่อน ถ้าไม่เจอหาจากชื่อจังหวัด
-    d_key = dist.upper().strip()
-    p_key = prov.upper().strip()
+def get_coordinates_from_api(sub, dist, prov, country):
+    # รวมชื่อที่อยู่เป็น String เดียวเพื่อไปค้นหาในฐานข้อมูลโลก
+    full_address = f"{sub}, {dist}, {prov}, {country}"
     
-    if d_key in GEO_DB: return GEO_DB[d_key]["lat"], GEO_DB[d_key]["lon"]
-    if p_key in GEO_DB: return GEO_DB[p_key]["lat"], GEO_DB[p_key]["lon"]
-    
-    # ถ้าไม่เจอเลย ให้กลับไปที่กรุงเทพฯ เป็นค่าเริ่มต้น
-    return 13.7563, 100.5018
+    try:
+        # เรียกใช้ Nominatim API (ฟรี)
+        geolocator = Nominatim(user_agent="v5950_satellite_tracker")
+        location = geolocator.geocode(full_address)
+        
+        if location:
+            return location.latitude, location.longitude
+        else:
+            # ถ้าหาไม่เจอ ให้คืนค่าพิกัดกลางของจังหวัด หรือกรุงเทพฯ
+            return 13.7563, 100.5018
+    except:
+        return 13.7563, 100.5018
 
+# ==========================================
+# 2. CORE SYSTEM (คงเดิม)
+# ==========================================
 @st.cache_resource
 def init_system():
     url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
@@ -49,73 +42,62 @@ def run_calculation(sat_obj):
     t = ts.now()
     geocentric = sat_obj.at(t)
     subpoint = wgs84.subpoint(geocentric)
-    return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees, 
-            "COORD": f"{subpoint.latitude.degrees:.4f}, {subpoint.longitude.degrees:.4f}"}
+    return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees}
 
 # ==========================================
-# 2. INTERFACE
+# 3. INTERFACE & SIDEBAR
 # ==========================================
-st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
+st.set_page_config(page_title="V5950 EXTERNAL DB", layout="wide")
 
-def reset_sys():
-    st.session_state.open_sys = False
+if 'st_lat' not in st.session_state:
+    st.session_state.st_lat, st.session_state.st_lon = 13.7563, 100.5018
 
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
-    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()), on_change=reset_sys)
+    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()))
     
-    st.subheader("📍 STATION LOCATION")
-    a1 = st.text_input("Sub-District", "Phra Borom", on_change=reset_sys)
-    a2 = st.text_input("District (e.g. Phra Nakhon)", "Phra Nakhon", on_change=reset_sys)
-    a3 = st.text_input("Province (e.g. Bangkok)", "Bangkok", on_change=reset_sys)
+    st.subheader("🌐 GLOBAL ADDRESS LOOKUP")
+    a1 = st.text_input("Sub-District / Place", "Phra Borom")
+    a2 = st.text_input("District / City", "Phra Nakhon")
+    a3 = st.text_input("Province / State", "Bangkok")
+    a4 = st.text_input("Country", "Thailand")
     
-    # ดึงพิกัดจากฐานข้อมูล GEO_DB
-    st_lat, st_lon = get_real_coords(a2, a3)
-    
-    if st.button("📍 CONFIRM & LOCK STATION", use_container_width=True):
-        st.success(f"STATION LOCKED AT: {st_lat}, {st_lon}")
-        reset_sys()
+    if st.button("🔍 FETCH EXTERNAL COORDINATES", use_container_width=True, type="primary"):
+        with st.spinner("Searching Global Database..."):
+            lat, lon = get_coordinates_from_api(a1, a2, a3, a4)
+            st.session_state.st_lat, st.session_state.st_lon = lat, lon
+            st.success(f"Found: {lat:.4f}, {lon:.4f}")
 
-    z1 = st.slider("Tactical Zoom", 1, 18, 12, on_change=reset_sys)
-    z2 = st.slider("Global Zoom", 1, 10, 2, on_change=reset_sys)
-    z3 = st.slider("Station Zoom", 1, 18, 15, on_change=reset_sys)
+    z3 = st.slider("Station Zoom", 1, 18, 15)
 
 # ==========================================
-# 3. DASHBOARD
+# 4. DASHBOARD (แผนที่อันที่ 3)
 # ==========================================
 @st.fragment(run_every=1.0)
 def dashboard():
     m = run_calculation(sat_catalog[sat_name])
+    cols = st.columns([2, 1]) # แบ่งฝั่งดาวเทียม กับ ฝั่งสถานี
     
-    st.subheader("🌍 GEOSPATIAL COMMAND")
-    m_cols = st.columns([1, 1, 1])
-    
-    def draw_map(lt, ln, zm, k, color='red', label="ASSET"):
-        fig = go.Figure()
-        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers+text', 
-                                       marker=dict(size=15, color=color),
-                                       text=[label], textposition="top right"))
+    with cols[0]:
+        st.write("📡 SATELLITE LIVE TRACK")
+        fig = go.Figure(go.Scattermapbox(lat=[m['LAT']], lon=[m['LON']], marker=dict(size=15, color='red')))
         fig.update_layout(
-            mapbox=dict(
-                style="white-bg", 
-                layers=[{"below": 'traces', "sourcetype": "raster", 
-                         "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], 
-                center=dict(lat=lt, lon=ln), zoom=zm
-            ), margin=dict(l=0,r=0,t=0,b=0), height=400, showlegend=False, dragmode=False
-        )
-        st.plotly_chart(fig, use_container_width=True, key=k, config={'scrollZoom': False})
-        
-    with m_cols[0]: 
-        st.write("📡 ASSET TRACKING (CLOSE)")
-        draw_map(m['LAT'], m['LON'], z1, "T1")
-        
-    with m_cols[1]: 
-        st.write("🌐 GLOBAL ORBIT")
-        draw_map(m['LAT'], m['LON'], z2, "G1")
-    
-    with m_cols[2]: 
-        st.write(f"🏠 STATION: {a2.upper()}")
-        # แผนที่ 3 ล็อกตามพิกัดที่เราหาจาก GEO_DB
-        draw_map(st_lat, st_lon, z3, "S1", color='cyan', label="STATION")
+            mapbox=dict(style="white-bg", 
+                         layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
+                         center=dict(lat=m['LAT'], lon=m['LON']), zoom=3),
+            margin=dict(l=0,r=0,t=0,b=0), height=500, dragmode=False)
+        st.plotly_chart(fig, use_container_width=True, key="sat_map")
+
+    with cols[1]:
+        st.write(f"🏠 STATION LOCATION (EXTERNAL DB)")
+        # แผนที่ที่ 3 ดึงจากพิกัดที่ Fetch มาจากฐานข้อมูลภายนอก
+        fig_st = go.Figure(go.Scattermapbox(lat=[st.session_state.st_lat], lon=[st.session_state.st_lon], 
+                                            marker=dict(size=20, color='cyan')))
+        fig_st.update_layout(
+            mapbox=dict(style="white-bg", 
+                         layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
+                         center=dict(lat=st.session_state.st_lat, lon=st.session_state.st_lon), zoom=z3),
+            margin=dict(l=0,r=0,t=0,b=0), height=500, dragmode=False)
+        st.plotly_chart(fig_st, use_container_width=True, key="st_map")
 
 dashboard()
