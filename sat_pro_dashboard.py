@@ -11,7 +11,7 @@ import random
 import string
 
 # ==========================================
-# 1. CORE ENGINE (REAL DATA & ID GENERATOR)
+# 1. CORE ENGINE (REAL DATA & ID)
 # ==========================================
 @st.cache_resource
 def init_system():
@@ -23,11 +23,11 @@ sat_catalog = init_system()
 ts = load.timescale()
 
 def generate_strict_id():
-    """สร้าง ID ในรูปแบบ REF-123-12SG6-12356S โดยสุ่มค่าแต่ล็อคตำแหน่ง"""
-    part1 = "".join(random.choices(string.digits, k=3))
-    part2 = "".join(random.choices(string.digits + string.ascii_uppercase, k=5))
-    part3 = "".join(random.choices(string.digits + string.ascii_uppercase, k=6))
-    return f"REF-{part1}-{part2}-{part3}"
+    """REF-XXX-XXXXX-XXXXXX Format"""
+    p1 = "".join(random.choices(string.digits, k=3))
+    p2 = "".join(random.choices(string.digits + string.ascii_uppercase, k=5))
+    p3 = "".join(random.choices(string.digits + string.ascii_uppercase, k=6))
+    return f"REF-{p1}-{p2}-{p3}"
 
 def run_calculation(sat_obj, target_dt=None):
     t_input = target_dt if target_dt else datetime.now(timezone.utc)
@@ -36,7 +36,7 @@ def run_calculation(sat_obj, target_dt=None):
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
     
-    # 40 ฟังก์ชันชื่อวิศวกรรมจริง (Real Subsystems)
+    # 40 Real Subsystem Functions
     tele = {
         "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
         "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
@@ -64,7 +64,7 @@ def run_calculation(sat_obj, target_dt=None):
             "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
-# 2. PDF ENGINE (GRID & SCALES)
+# 2. HD PDF ENGINE
 # ==========================================
 class ENGINEERING_PDF(FPDF):
     def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
@@ -107,11 +107,10 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 3. INTERFACE (POPUP & ZOOM PROTECTION)
+# 3. INTERFACE (RESTORED FEATURES)
 # ==========================================
 st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
 
-# ล็อค State ป้องกันป๊อปอัพเด้ง
 if 'show_modal' not in st.session_state: st.session_state.show_modal = False
 if 'pdf_ready' not in st.session_state: st.session_state.pdf_ready = None
 
@@ -122,11 +121,8 @@ with st.sidebar:
     addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
     st.divider()
     z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
-    
-    # ปุ่มกดครั้งเดียวเพื่อเปิดหน้าต่าง
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
-        st.session_state.pdf_ready = None
-        st.session_state.show_modal = True
+        st.session_state.pdf_ready = None; st.session_state.show_modal = True
 
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
@@ -135,14 +131,12 @@ def archive_dialog():
         s_pos = st.text_input("Position", "CHIEF COMMANDER")
         s_img = st.file_uploader("Seal (PNG)", type=['png'])
         if st.button("🚀 INITIATE", use_container_width=True):
-            # สุ่มเลข/อักษร แต่ล็อคตำแหน่งเดิมเป๊ะๆ
             fid = generate_strict_id() 
             pwd = ''.join(random.choices(string.digits, k=6))
             m_data = run_calculation(sat_catalog[sat_name])
             st.session_state.pdf_ready = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
             st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
     else:
-        # กรอบขาวสูง + เส้นขีดคั่นกลาง
         st.markdown(f'''
             <div style="background:white; border:4px solid black; padding:50px 20px; text-align:center; color:black; border-radius:10px;">
                 <div style="font-size:18px; color:#666;">DOCUMENT ARCHIVE ID</div>
@@ -152,20 +146,17 @@ def archive_dialog():
                 <div style="font-size:42px; font-weight:900; letter-spacing:10px; margin-top:10px;">{st.session_state.m_pwd}</div>
             </div>
         ''', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD ENCRYPTED ARCHIVE", st.session_state.pdf_ready, f"{st.session_state.m_id}.pdf", use_container_width=True)
-        if st.button("RETURN TO COMMAND"): 
-            st.session_state.show_modal = False
-            st.session_state.pdf_ready = None
-            st.rerun()
+        st.download_button("📥 DOWNLOAD ARCHIVE", st.session_state.pdf_ready, f"{st.session_state.m_id}.pdf", use_container_width=True)
+        if st.button("RETURN"): st.session_state.show_modal = False; st.session_state.pdf_ready = None; st.rerun()
 
-# จุดเช็คสถานะป๊อปอัพ (ย้ายมาไว้นอก Sidebar เพื่อป้องกันการ Rerun จาก Slider)
-if st.session_state.show_modal:
-    archive_dialog()
+if st.session_state.show_modal: archive_dialog()
 
 @st.fragment(run_every=1.0)
 def dashboard():
     st.markdown(f'''<div style="display:flex; justify-content:center; margin-bottom:20px;"><div style="background:white; border:5px solid black; padding:10px 60px; border-radius:100px; text-align:center;"><span style="color:black; font-size:60px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span></div></div>''', unsafe_allow_html=True)
     m = run_calculation(sat_catalog[sat_name])
+    
+    # Maps
     m_cols = st.columns(3)
     def draw_map(lt, ln, zm, k, tl=[], tn=[]):
         fig = go.Figure()
@@ -176,6 +167,14 @@ def dashboard():
     with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[2]: draw_map(13.75, 100.5, z3, "S1")
+
+    # กราฟที่หายไป เอากลับมาให้แล้ว
+    st.subheader("📊 REAL-TIME ANALYTICS")
+    g_cols = st.columns(2)
+    fig_opt = dict(template="plotly_dark", height=250, margin=dict(l=10, r=10, t=30, b=10))
+    with g_cols[0]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_ALT"], mode='lines', line=dict(color='#00ff00', width=3))).update_layout(title="ALTITUDE TRACK (KM)", **fig_opt), use_container_width=True)
+    with g_cols[1]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_VEL"], mode='lines', line=dict(color='#ffff00', width=3))).update_layout(title="VELOCITY TRACK (KM/H)", **fig_opt), use_container_width=True)
+
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 dashboard()
