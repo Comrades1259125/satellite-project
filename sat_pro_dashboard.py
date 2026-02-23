@@ -13,7 +13,7 @@ from skyfield.api import load, wgs84
 from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
-# 1. CORE DATA ENGINE
+# 1. CORE DATA ENGINE (คงเดิม)
 # ==========================================
 @st.cache_resource
 def init_system():
@@ -86,7 +86,7 @@ def run_calculation(sat_obj, target_dt=None):
             "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
-# 2. HD PDF ENGINE
+# 2. HD PDF ENGINE (คงเดิม)
 # ==========================================
 def generate_verified_qr(data_text):
     qr = qrcode.QRCode(border=2)
@@ -136,35 +136,21 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     pdf.draw_precision_graph(25, 30, 160, 65, "ORBITAL LATITUDE TRACKING (DEG)", m['TAIL_LAT'], (0, 80, 180))
     pdf.draw_precision_graph(25, 115, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
     pdf.draw_precision_graph(110, 115, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
-    
-    # 📸 จุดที่ 1: ใช้ไฟล์ชั่วคราวสำหรับรูป QR
     qr_buf = generate_verified_qr(f_id)
     with open("temp_qr.png", "wb") as f:
         f.write(qr_buf.getvalue())
     pdf.image("temp_qr.png", 20, 190, 45, 60)
-    
     pdf.line(105, 230, 195, 230)
-    
-    # 📸 จุดที่ 2: ใช้ไฟล์ชั่วคราวสำหรับรูปตราประทับ (ถ้ามี)
     if s_img:
         with open("temp_seal.png", "wb") as f:
             f.write(s_img.getvalue())
         pdf.image("temp_seal.png", 135, 205, 30, 22)
-        
     pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
     pdf.set_x(105); pdf.set_font("helvetica", 'I', 9); pdf.cell(90, 5, s_pos.upper(), align='C')
-    
-    # 🔐 จุดที่ 3: แก้ไข PDF Output Type เพื่อการเข้ารหัส (Fix TypeError)
     pdf_data = pdf.output(dest='S').encode('latin-1')
-    raw = BytesIO(pdf_data)
-    reader = PdfReader(raw)
-    writer = PdfWriter()
-    writer.add_page(reader.pages[0])
-    writer.add_page(reader.pages[1])
-    writer.encrypt(pwd)
-    final = BytesIO()
-    writer.write(final)
-    return final.getvalue()
+    raw = BytesIO(pdf_data); reader = PdfReader(raw); writer = PdfWriter()
+    writer.add_page(reader.pages[0]); writer.add_page(reader.pages[1])
+    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
 # 3. RESPONSIVE INTERFACE (iPad & Mobile)
@@ -202,6 +188,7 @@ with st.sidebar:
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 
+# --- จุดที่แก้ไข: ปรับปรุงการแสดงผลเพื่อ Dark Mode และจัดปุ่มตรงกลาง ---
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
     if st.session_state.pdf_blob is None:
@@ -219,9 +206,21 @@ def archive_dialog():
             st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
             st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
     else:
-        st.markdown(f'<div style="background:white; border:4px solid black; padding:20px; text-align:center;"><div style="font-size:18px;">ID: {st.session_state.m_id}</div><div style="font-size:24px; font-weight:900;">PASS: {st.session_state.m_pwd}</div></div>', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf")
-        if st.button("RETURN"): st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
+        # ส่วนแสดงผลที่มีพื้นหลังขาว เส้นคั่นกลาง และตัวหนังสือดำ (ชัดในทุกโหมด)
+        st.markdown(f'''
+            <div style="background-color: white; border: 5px solid black; padding: 40px; text-align: center; color: black; border-radius: 10px; margin-bottom: 25px;">
+                <div style="font-size: 22px; font-weight: normal;">ID: {st.session_state.m_id}</div>
+                <hr style="border: 0; border-top: 3px solid black; width: 60%; margin: 20px auto;">
+                <div style="font-size: 36px; font-weight: 900; letter-spacing: 2px;">PASS: {st.session_state.m_pwd}</div>
+            </div>
+        ''', unsafe_allow_html=True)
+        
+        # จัดปุ่มให้อยู่กึ่งกลางโดยใช้ columns
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
+            if st.button("RETURN", use_container_width=True): 
+                st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
 
 if st.session_state.open_sys: archive_dialog()
 
@@ -229,32 +228,26 @@ if st.session_state.open_sys: archive_dialog()
 def dashboard():
     clock_spot.markdown(f'''<div style="display:flex; justify-content:center; margin-bottom:20px;"><div class="clock-container" style="background:white; border:5px solid black; padding:10px 60px; border-radius:100px; text-align:center;"><span class="clock-text" style="color:black; font-size:60px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span></div></div>''', unsafe_allow_html=True)
     m = run_calculation(sat_catalog[sat_name])
-    
     c1, c2, c3 = st.columns([1, 1, 1])
     c1.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
     c2.metric("VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
     c3.metric("COORD", m["COORD"])
-    
     st.subheader("🌍 GEOSPATIAL COMMAND")
     m_cols = st.columns([1, 1, 1])
-    
     def draw_map(lt, ln, zm, k, tl, tn):
         fig = go.Figure()
         fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
         fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=14, color='red')))
         fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False)
         st.plotly_chart(fig, use_container_width=True, key=k)
-        
     with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[2]: draw_map(13.75, 100.5, z3, "S1", [], [])
-
     st.subheader("📊 PERFORMANCE ANALYTICS")
     g_cols = st.columns([1, 1])
     fig_opt = dict(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
     with g_cols[0]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_ALT"], mode='lines+markers', line=dict(color='#00ff00'))).update_layout(title="ALTITUDE TRACK", **fig_opt), use_container_width=True)
     with g_cols[1]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_VEL"], mode='lines+markers', line=dict(color='#ffff00'))).update_layout(title="VELOCITY TRACK", **fig_opt), use_container_width=True)
-    
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 dashboard()
