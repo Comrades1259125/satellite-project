@@ -13,7 +13,7 @@ from skyfield.api import load, wgs84
 from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
-# 1. CORE DATA ENGINE (คงเดิม)
+# 1. CORE DATA ENGINE
 # ==========================================
 @st.cache_resource
 def init_system():
@@ -86,7 +86,7 @@ def run_calculation(sat_obj, target_dt=None):
             "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
-# 2. HD PDF ENGINE (คงเดิม)
+# 2. HD PDF ENGINE
 # ==========================================
 def generate_verified_qr(data_text):
     qr = qrcode.QRCode(border=2)
@@ -153,7 +153,7 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 3. RESPONSIVE INTERFACE (iPad & Mobile)
+# 3. RESPONSIVE INTERFACE
 # ==========================================
 st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
 
@@ -173,7 +173,7 @@ st.markdown("""
 
 clock_spot = st.empty()
 
-# --- จุดที่แก้ไข: เพิ่มฟังก์ชัน Reset สถานะเมื่อมีการพิมพ์ข้อมูลใหม่ ---
+# ฟังก์ชัน Reset สถานะ
 def reset_sys():
     st.session_state.open_sys = False
     st.session_state.pdf_blob = None
@@ -182,13 +182,23 @@ with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
     sat_name = st.selectbox("ASSET", list(sat_catalog.keys()), on_change=reset_sys)
     st.subheader("📍 STATION LOCATION")
-    # เพิ่ม on_change=reset_sys เพื่อปิดป๊อปอัพทันทีที่เริ่มพิมพ์ใหม่
     a1 = st.text_input("Sub-District", "Phra Borom", on_change=reset_sys)
     a2 = st.text_input("District", "Phra Nakhon", on_change=reset_sys)
     a3 = st.text_input("Province", "Bangkok", on_change=reset_sys)
     a4 = st.text_input("Country", "Thailand", on_change=reset_sys)
     addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
-    z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
+    
+    # 📍 เพิ่มปุ่มยืนยันตำแหน่ง
+    if st.button("📍 CONFIRM LOCATION", use_container_width=True):
+        st.toast("STATION LOCATION UPDATED")
+        reset_sys()
+
+    # เพิ่ม on_change ใน Slider เพื่อกันหน้าดาวน์โหลดเด้งตอนซูม
+    z1 = st.slider("Tactical", 1, 18, 12, on_change=reset_sys)
+    z2 = st.slider("Global", 1, 10, 2, on_change=reset_sys)
+    z3 = st.slider("Station", 1, 18, 15, on_change=reset_sys)
+    
+    st.markdown("---")
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"): st.session_state.open_sys = True
 
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
