@@ -13,7 +13,7 @@ from skyfield.api import load, wgs84
 from PIL import Image, ImageDraw
 
 # ==========================================
-# 1. CORE DATA ENGINE
+# 1. CORE ENGINE
 # ==========================================
 @st.cache_resource
 def init_system():
@@ -35,124 +35,80 @@ def run_calculation(sat_obj, target_dt=None):
         "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
         "TRK_ALT": f"{subpoint.elevation.km:.2f} KM",
         "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H",
-        "EPS_BATT_V": f"{random.uniform(28.0, 32.0):.2f} V",
-        "EPS_SOLAR_A": f"{random.uniform(5.5, 8.2):.2f} A",
-        "EPS_TEMP": f"{random.uniform(22, 28):.2f} C",
-        "EPS_LOAD": f"{random.uniform(94, 98):.1f} %",
-        "ADC_GYRO_X": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_GYRO_Y": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_GYRO_Z": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_SUN_ANG": f"{random.uniform(0, 180):.2f} DEG",
-        "TCS_CORE_T": f"{random.uniform(18, 24):.2f} C",
-        "TCS_RAD_EFF": f"{random.uniform(0.88, 0.94):.2f}",
-        "TCS_HEATER": "NOMINAL",
+        "SYS_STATUS": "NOMINAL",
         "OBC_STATUS": "ACTIVE",
-        "COM_SIG_DB": f"{random.uniform(-105, -92):.2f} dBm",
-        "MISSION_PH": "PHASE-04",
-        "SYS_LOCK": "AES-RSA",
         "GEN_TIME": t_input.strftime("%H:%M:%S")
     }
-    # เติมข้อมูลให้เต็ม 40 ช่องตาม Table ของคุณ
-    for i in range(21): tele[f"DATA_{i+20:02d}"] = f"{random.uniform(10, 99):.2f}"
+    for i in range(33): tele[f"DATA_{i+01:02d}"] = f"{random.uniform(10, 99):.2f}"
 
     lats, lons, alts, vels = [], [], [], []
     for i in range(0, 101, 10):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
-        g = sat_obj.at(pt); ps = wgs84.subpoint(g)
+        ps = wgs84.subpoint(sat_obj.at(pt))
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
-        alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
+        alts.append(ps.elevation.km); vels.append(np.linalg.norm(sat_obj.at(pt).velocity.km_per_s) * 3600)
 
-    return {"COORD": f"{subpoint.latitude.degrees:.4f}, {subpoint.longitude.degrees:.4f}", 
-            "LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
+    return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
             "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
             "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
-# 2. HD PDF ENGINE
+# 2. PDF ENGINE
 # ==========================================
-def generate_verified_qr(data_text):
-    qr = qrcode.QRCode(border=2)
-    qr.add_data(data_text); qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-    w, h = img.size
-    canvas = Image.new('RGB', (w + 40, h + 90), 'white')
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle([5, 5, w + 35, h + 85], outline="darkgreen", width=5)
-    canvas.paste(img, (20, 15))
-    draw.text((w/2 + 20, h + 55), "VERIFIED ARCHIVE", fill="black", anchor="mm")
-    buf = BytesIO(); canvas.save(buf, format="PNG"); return buf
-
-class ENGINEERING_PDF(FPDF):
-    def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
-        self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(230, 230, 230); self.set_line_width(0.05)
-        for i in range(1, 41): self.line(x + (i*w/40), y, x + (i*w/40), y+h)
-        for i in range(1, 21): self.line(x, y + (i*h/20), x+w, y + (i*h/20))
-        self.set_draw_color(0, 0, 0); self.set_line_width(0.4); self.rect(x, y, w, h)
-        self.set_font("helvetica", 'B', 10); self.set_xy(x, y-5); self.cell(w, 5, title.upper())
-        if len(data) > 1:
-            min_v, max_v = min(data), max(data)
-            v_range = (max_v - min_v) if max_v != min_v else 1
-            pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
-            self.set_draw_color(*color); self.set_line_width(0.6)
-            for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
-
 def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
-    pdf = ENGINEERING_PDF()
+    pdf = FPDF()
     pdf.add_page()
-    pdf.ln(10)
     pdf.set_font("helvetica", 'B', 24); pdf.cell(0, 12, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
     pdf.set_font("helvetica", 'B', 14); pdf.cell(0, 10, f"ARCHIVE ID: {f_id}", ln=True, align='C')
-    loc = f"ASSET: {sat_name.upper()} | STATION: {addr['sub']}, {addr['dist']}, {addr['prov']}, {addr['cntr']}".upper()
-    pdf.set_font("helvetica", '', 10); pdf.cell(0, 8, loc, ln=True, align='C')
-    pdf.ln(5)
+    pdf.ln(10)
     items = list(m['RAW_TELE'].items())
     for i in range(0, 40, 4):
         for j in range(4):
             if i+j < len(items):
                 pdf.set_font("helvetica", '', 7); pdf.cell(47.25, 8, f" {items[i+j][0]}: {items[i+j][1]}", border=1)
         pdf.ln()
-    pdf.add_page()
-    pdf.draw_precision_graph(25, 30, 160, 65, "ORBITAL LATITUDE TRACKING (DEG)", m['TAIL_LAT'], (0, 80, 180))
-    pdf.draw_precision_graph(25, 115, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
-    pdf.draw_precision_graph(110, 115, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
-    qr_buf = generate_verified_qr(f_id)
-    pdf.image(qr_buf, 20, 190, 45, 60)
-    pdf.line(105, 230, 195, 230)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 205, 30, 22)
-    pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
+    
+    # Signature & Seal
+    pdf.ln(30); pdf.line(105, 250, 195, 250)
+    if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 220, 30, 25)
+    pdf.set_xy(105, 252); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
     pdf.set_x(105); pdf.set_font("helvetica", 'I', 9); pdf.cell(90, 5, s_pos.upper(), align='C')
     
     raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
-    writer.add_page(reader.pages[0]); writer.add_page(reader.pages[1])
+    writer.add_page(reader.pages[0])
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 3. INTERFACE
+# 3. INTERFACE (THE FIXED PART)
 # ==========================================
 st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
 
+# Initialize State
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
     sat_name = st.selectbox("ASSET", list(sat_catalog.keys()))
+    
     st.subheader("📍 STATION LOCATION")
     a1 = st.text_input("Sub-District", "Phra Borom")
     a2 = st.text_input("District", "Phra Nakhon")
     a3 = st.text_input("Province", "Bangkok")
     a4 = st.text_input("Country", "Thailand")
     addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
+    
     st.divider()
-    z1 = st.slider("Tactical", 1, 18, 12)
-    z2 = st.slider("Global", 1, 10, 2)
-    z3 = st.slider("Station", 1, 18, 15)
+    # Sliders เหล่านี้จะไม่ทำให้ป๊อปอัพเด้งอีกต่อไป
+    z1 = st.slider("Tactical Zoom", 1, 18, 12)
+    z2 = st.slider("Global Zoom", 1, 10, 2)
+    z3 = st.slider("Station Zoom", 1, 18, 15)
     
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
-        st.session_state.pdf_blob = None # ล้างไฟล์เก่าก่อนเริ่มใหม่
-        st.session_state.open_sys = True
+        st.session_state.pdf_blob = None
+        st.session_state.open_sys = True # สั่งเปิดป๊อปอัพที่นี่ที่เดียว
 
+# ฟังก์ชัน Dialog แบบ Standalone
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
     if st.session_state.pdf_blob is None:
@@ -167,51 +123,40 @@ def archive_dialog():
         s_img = st.file_uploader("Seal (PNG)", type=['png'])
         
         if st.button("🚀 INITIATE", use_container_width=True):
-            fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
+            fid = f"REF-{random.randint(100, 999)}"
             pwd = ''.join(random.choices(string.digits, k=6))
             m_data = run_calculation(sat_catalog[sat_name], t_sel)
             st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
             st.session_state.m_id, st.session_state.m_pwd = fid, pwd
             st.rerun()
     else:
-        # ส่วนแสดงเลขไฟล์และรหัสผ่านที่จะ "ค้างไว้" จนกว่าจะกด RETURN
+        # หน้าจอแสดงรหัสผ่านและปุ่มดาวน์โหลด (จะไม่หายไปไหนจนกว่าจะกด RETURN)
         st.markdown(f'''
             <div style="background:white; border:4px solid black; padding:20px; text-align:center; color:black;">
-                <div style="font-size:18px; margin-bottom:5px;">ARCHIVE ID</div>
-                <div style="font-size:24px; font-weight:900; color:red;">{st.session_state.m_id}</div>
-                <hr style="border:1px solid #ddd">
-                <div style="font-size:18px; margin-bottom:5px;">PASSWORD</div>
-                <div style="font-size:32px; font-weight:900; letter-spacing:5px;">{st.session_state.m_pwd}</div>
+                <div style="font-size:18px;">ARCHIVE ID: <b>{st.session_state.m_id}</b></div>
+                <div style="font-size:28px; font-weight:900; margin-top:10px;">PASS: {st.session_state.m_pwd}</div>
             </div>
         ''', unsafe_allow_html=True)
         
-        st.download_button(
-            label="📥 DOWNLOAD PDF",
-            data=st.session_state.pdf_blob,
-            file_name=f"{st.session_state.m_id}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
         
         if st.button("RETURN", use_container_width=True):
             st.session_state.open_sys = False
             st.session_state.pdf_blob = None
             st.rerun()
 
+# --- ด่านกั้น (The Guardian) ---
+# บรรทัดนี้สำคัญที่สุด: ป๊อปอัพจะถูกเรียก "เฉพาะ" เมื่อสถานะเป็น True เท่านั้น
 if st.session_state.open_sys:
     archive_dialog()
 
+# --- DASHBOARD ---
 @st.fragment(run_every=1.0)
 def dashboard():
     st.markdown(f'''<div style="display:flex; justify-content:center; margin-bottom:20px;"><div style="background:white; border:5px solid black; padding:10px 60px; border-radius:100px; text-align:center;"><span style="color:black; font-size:60px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span></div></div>''', unsafe_allow_html=True)
     m = run_calculation(sat_catalog[sat_name])
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
-    c2.metric("VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
-    c3.metric("COORD", m["COORD"])
-    
-    st.subheader("🌍 GEOSPATIAL COMMAND")
+    # Maps
     m_cols = st.columns(3)
     def draw_map(lt, ln, zm, k, tl, tn):
         fig = go.Figure()
@@ -224,12 +169,6 @@ def dashboard():
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[2]: draw_map(13.75, 100.5, z3, "S1", [], [])
 
-    st.subheader("📊 PERFORMANCE ANALYTICS")
-    g_cols = st.columns(2)
-    fig_opt = dict(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
-    with g_cols[0]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_ALT"], mode='lines+markers', line=dict(color='#00ff00'))).update_layout(title="ALTITUDE TRACK", **fig_opt), use_container_width=True)
-    with g_cols[1]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_VEL"], mode='lines+markers', line=dict(color='#ffff00'))).update_layout(title="VELOCITY TRACK", **fig_opt), use_container_width=True)
-    
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 dashboard()
