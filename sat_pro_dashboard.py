@@ -12,9 +12,7 @@ from io import BytesIO
 from skyfield.api import load, wgs84
 from geopy.geocoders import Nominatim
 
-# ==========================================
-# 1. CORE ENGINE & CALCULATIONS
-# ==========================================
+# --- CORE ENGINE ---
 @st.cache_resource
 def init_system():
     try:
@@ -24,7 +22,7 @@ def init_system():
 
 sat_catalog = init_system()
 ts = load.timescale()
-geolocator = Nominatim(user_agent="v5950_fixed_final")
+geolocator = Nominatim(user_agent="v5950_final_ultimate")
 
 def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
     t_input = target_dt if target_dt else datetime.now(timezone.utc)
@@ -32,91 +30,61 @@ def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
     geocentric = sat_obj.at(t)
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
-    
     station = wgs84.latlon(st_lat, st_lon)
     alt, az, distance = (sat_obj - station).at(t).altaz()
     
     tele = {
-        "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
-        "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
-        "TRK_ALT": f"{subpoint.elevation.km:.2f} KM",
-        "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H",
-        "SIG_ELEV": f"{alt.degrees:.2f} DEG",
-        "SIG_DIST": f"{distance.km:.2f} KM",
-        "COM_SIG_DB": f"{-90 - (distance.km/150):.2f} dBm",
-        "OBC_STATUS": "ACTIVE" if alt.degrees > -5 else "SLEEP",
-        "MISSION_PH": "PHASE-04",
+        "TRK_LAT": f"{subpoint.latitude.degrees:.4f}", "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
+        "TRK_ALT": f"{subpoint.elevation.km:.2f} KM", "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H",
+        "SIG_ELEV": f"{alt.degrees:.2f} DEG", "SIG_DIST": f"{distance.km:.2f} KM",
+        "COM_SIG_DB": f"{-90 - (distance.km/150):.2f} dBm", "OBC_STATUS": "ACTIVE" if alt.degrees > -5 else "SLEEP",
         "GEN_TIME": t_input.strftime("%Y-%m-%d %H:%M:%S")
     }
-    for i in range(30): tele[f"DATA_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
-
+    for i in range(20): tele[f"DATA_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
+    
     lats, lons = [], []
-    for i in range(0, 101, 10):
+    for i in range(0, 101, 20):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
         ps = wgs84.subpoint(sat_obj.at(pt))
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
 
     return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
             "FOOTPRINT": np.sqrt(2 * 6371 * subpoint.elevation.km), 
-            "IN_VIEW": alt.degrees > 0, "TAIL_LAT": lats, "TAIL_LON": lons, "RAW_TELE": tele}
+            "TAIL_LAT": lats, "TAIL_LON": lons, "RAW_TELE": tele}
 
-# ==========================================
-# 2. PDF ENGINE (WITH SIGNATURES)
-# ==========================================
-class ENGINEERING_PDF(FPDF):
-    def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
-        self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(220, 220, 220); self.set_line_width(0.1)
-        for i in range(1, 11): self.line(x + (i*w/10), y, x + (i*w/10), y+h)
-        self.set_draw_color(40, 45, 55); self.set_line_width(0.4); self.rect(x, y, w, h)
-        self.set_font("helvetica", 'B', 10); self.set_xy(x, y-5); self.cell(w, 5, title.upper())
-        if len(data) > 1:
-            min_v, max_v = min(data), max(data)
-            v_range = (max_v - min_v) if max_v != min_v else 1
-            pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
-            self.set_draw_color(*color); self.set_line_width(0.7)
-            for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
-
+# --- PDF GENERATOR (WITH FULL OPTIONS) ---
 def build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, f_id, pwd, m):
-    pdf = ENGINEERING_PDF()
+    pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("helvetica", 'B', 24); pdf.cell(0, 15, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
-    pdf.set_fill_color(30, 30, 40); pdf.set_text_color(255, 255, 255); pdf.set_font("helvetica", 'B', 8)
+    pdf.set_font("helvetica", 'B', 20)
+    pdf.cell(0, 15, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
+    pdf.set_font("helvetica", 'B', 9)
+    pdf.set_fill_color(30, 30, 40); pdf.set_text_color(255, 255, 255)
     full_addr = f"{addr_dict['sub']}, {addr_dict['dist']}, {addr_dict['prov']}, {addr_dict['cntr']}".upper()
-    pdf.cell(0, 10, f"  ASSET: {sat_name.upper()} | STATION: {full_addr}", ln=True, fill=True)
-    pdf.set_text_color(0, 0, 0); pdf.ln(5)
-
-    items = list(m['RAW_TELE'].items())
-    for i in range(0, 40, 4):
-        for j in range(4):
-            if i+j < len(items):
-                pdf.set_font("helvetica", 'B', 7); pdf.set_fill_color(240, 240, 245)
-                pdf.cell(47.5, 6, f" {items[i+j][0]}", border='LTR', fill=True)
-        pdf.ln()
-        for j in range(4):
-            if i+j < len(items):
-                pdf.set_font("helvetica", '', 8)
-                pdf.cell(47.5, 7, f" {items[i+j][1]}", border='LBR')
-        pdf.ln(2)
-
-    pdf.add_page()
-    pdf.draw_precision_graph(20, 30, 170, 70, "ORBITAL TRACKING", m['TAIL_LAT'])
-    qr_img = qrcode.make(f_id).convert('RGB')
-    pdf.image(qr_img, x=20, y=200, w=40)
-    pdf.line(110, 250, 190, 250)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), x=140, y=225, w=30)
-    pdf.set_xy(110, 252); pdf.set_font("helvetica", 'B', 12); pdf.cell(80, 7, s_name.upper(), align='C', ln=True)
-    pdf.set_x(110); pdf.set_font("helvetica", 'I', 10); pdf.cell(80, 5, s_pos.upper(), align='C')
+    pdf.cell(0, 10, f" ASSET: {sat_name} | STATION: {full_addr}", ln=True, fill=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(5)
+    for k, v in m['RAW_TELE'].items():
+        pdf.set_font("helvetica", 'B', 8); pdf.cell(40, 7, f"{k}:", border=1)
+        pdf.set_font("helvetica", '', 8); pdf.cell(50, 7, f"{v}", border=1, ln=True)
     
-    raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
-    for p in reader.pages: writer.add_page(p)
+    # Signature Section
+    pdf.ln(20)
+    pdf.line(120, 240, 190, 240)
+    if s_img: pdf.image(BytesIO(s_img.getvalue()), x=140, y=215, w=30)
+    pdf.set_xy(120, 242); pdf.set_font("helvetica", 'B', 10); pdf.cell(70, 7, s_name.upper(), align='C', ln=True)
+    pdf.set_x(120); pdf.cell(70, 5, s_pos.upper(), align='C')
+    
+    raw = BytesIO(pdf.output())
+    writer = PdfWriter(); writer.append_pages_from_reader(PdfReader(raw))
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 3. INTERFACE (4-ADDR + PREDICTIVE + SIGN)
+# 4. STABLE INTERFACE
 # ==========================================
-st.set_page_config(page_title="V5950 ULTIMATE", layout="wide")
+st.set_page_config(page_title="V5950 STABLE", layout="wide")
 
+# State Management (ห้ามลบ)
 if 'show_dialog' not in st.session_state: st.session_state.show_dialog = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 if 'st_lat' not in st.session_state: st.session_state.st_lat, st.session_state.st_lon = 13.75, 100.5
@@ -137,7 +105,7 @@ with st.sidebar:
         if loc: st.session_state.st_lat, st.session_state.st_lon = loc.latitude, loc.longitude
 
     st.divider()
-    # Sliders แยกอิสระ ป๊อปอัพไม่เด้ง
+    # Slider เหล่านี้ขยับได้อิสระ ป๊อปอัพจะไม่เด้ง
     z1 = st.slider("Tactical Zoom", 1, 18, 12)
     z2 = st.slider("Global Zoom", 1, 10, 2)
     z3 = st.slider("Station Zoom", 1, 18, 15)
@@ -146,40 +114,45 @@ with st.sidebar:
         st.session_state.pdf_blob = None
         st.session_state.show_dialog = True
 
+# ระบบ Dialog แยกส่วน
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
-    if st.session_state.pdf_blob is None:
-        mode = st.radio("Time Mode", ["Live", "Predictive"], horizontal=True)
-        t_sel = None
-        if mode == "Predictive":
-            c1, c2 = st.columns(2)
-            d, t = c1.date_input("Date"), c2.time_input("Time")
-            t_sel = datetime.combine(d, t).replace(tzinfo=timezone.utc)
-        
-        st.divider()
-        # --- ช่องลายเซ็นกลับมาแล้ว ---
-        s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
-        s_pos = st.text_input("Position", "CHIEF COMMANDER")
-        s_img = st.file_uploader("Seal (PNG)", type=['png'])
-        
-        if st.button("🚀 GENERATE", use_container_width=True):
-            m_data = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon, t_sel)
-            fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
-            pwd = ''.join(random.choices(string.digits, k=6))
-            st.session_state.pdf_blob = build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, fid, pwd, m_data)
-            st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
-    else:
-        st.markdown(f'<div style="background:white; border:4px solid black; padding:20px; text-align:center; color:black;">ID: {st.session_state.m_id}<br><b style="font-size:35px;">{st.session_state.m_pwd}</b></div>', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
-        if st.button("CLOSE"): st.session_state.show_dialog = False; st.rerun()
+    mode = st.radio("Time Mode", ["Live", "Predictive"], horizontal=True)
+    t_sel = None
+    if mode == "Predictive":
+        c1, c2 = st.columns(2)
+        d, t = c1.date_input("Date"), c2.time_input("Time")
+        t_sel = datetime.combine(d, t).replace(tzinfo=timezone.utc)
+    
+    st.divider()
+    s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
+    s_pos = st.text_input("Position", "CHIEF COMMANDER")
+    s_img = st.file_uploader("Digital Seal (PNG)", type=['png'])
+    
+    if st.button("🚀 GENERATE PDF", use_container_width=True):
+        m_data = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon, t_sel)
+        fid = f"REF-{random.randint(100, 999)}"
+        pwd = ''.join(random.choices(string.digits, k=6))
+        st.session_state.pdf_blob = build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, fid, pwd, m_data)
+        st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
+    
+    if st.session_state.pdf_blob:
+        st.success(f"ID: {st.session_state.m_id} | PASS: {st.session_state.m_pwd}")
+        st.download_button("📥 DOWNLOAD", st.session_state.pdf_blob, "report.pdf", use_container_width=True)
+    
+    if st.button("CLOSE WINDOW"):
+        st.session_state.show_dialog = False; st.rerun()
 
-if st.session_state.show_dialog: archive_dialog()
+if st.session_state.show_dialog:
+    archive_dialog()
 
+# Dashboard ส่วนแสดงผล (ใช้ Fragment เพื่อให้รีเฟรชเฉพาะตัวเอง)
 @st.fragment(run_every=1.0)
 def dashboard():
-    st.markdown(f'''<div style="text-align:center; margin-bottom:20px;"><div style="display:inline-block; background:white; border:5px solid black; padding:5px 50px; border-radius:100px; color:black; font-size:40px; font-weight:bold;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</div></div>''', unsafe_allow_html=True)
+    st.markdown(f'''<div style="text-align:center; margin-bottom:20px;"><div style="display:inline-block; background:white; border:4px solid black; padding:5px 50px; border-radius:100px; color:black; font-size:40px; font-weight:bold;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</div></div>''', unsafe_allow_html=True)
     m = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon)
     m_cols = st.columns(3)
+    
     def draw_map(lt, ln, zm, k, tl=[], tn=[], foot=0):
         fig = go.Figure()
         if foot > 0: fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=zm*15, color='rgba(0, 255, 0, 0.1)')))
