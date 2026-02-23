@@ -188,7 +188,6 @@ with st.sidebar:
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 
-# --- จุดที่แก้ไข: ปรับปรุงการแสดงผลเพื่อ Dark Mode และจัดปุ่มตรงกลาง ---
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
     if st.session_state.pdf_blob is None:
@@ -206,7 +205,6 @@ def archive_dialog():
             st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
             st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
     else:
-        # ส่วนแสดงผลที่มีพื้นหลังขาว เส้นคั่นกลาง และตัวหนังสือดำ (ชัดในทุกโหมด)
         st.markdown(f'''
             <div style="background-color: white; border: 5px solid black; padding: 40px; text-align: center; color: black; border-radius: 10px; margin-bottom: 25px;">
                 <div style="font-size: 22px; font-weight: normal;">ID: {st.session_state.m_id}</div>
@@ -214,8 +212,6 @@ def archive_dialog():
                 <div style="font-size: 36px; font-weight: 900; letter-spacing: 2px;">PASS: {st.session_state.m_pwd}</div>
             </div>
         ''', unsafe_allow_html=True)
-        
-        # จัดปุ่มให้อยู่กึ่งกลางโดยใช้ columns
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
             st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
@@ -234,15 +230,30 @@ def dashboard():
     c3.metric("COORD", m["COORD"])
     st.subheader("🌍 GEOSPATIAL COMMAND")
     m_cols = st.columns([1, 1, 1])
+    
+    # --- จุดที่แก้ไข: ล็อคการลากแผนที่ด้วยนิ้ว ---
     def draw_map(lt, ln, zm, k, tl, tn):
         fig = go.Figure()
         fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
         fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=14, color='red')))
-        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True, key=k)
+        fig.update_layout(
+            mapbox=dict(
+                style="white-bg", 
+                layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], 
+                center=dict(lat=lt, lon=ln), 
+                zoom=zm
+            ), 
+            margin=dict(l=0,r=0,t=0,b=0), 
+            height=350, 
+            showlegend=False,
+            dragmode=False # ปิดการลาก (Pan)
+        )
+        st.plotly_chart(fig, use_container_width=True, key=k, config={'scrollZoom': False, 'displayModeBar': False}) # ปิดการซูมและแถบเครื่องมือ
+        
     with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[2]: draw_map(13.75, 100.5, z3, "S1", [], [])
+
     st.subheader("📊 PERFORMANCE ANALYTICS")
     g_cols = st.columns([1, 1])
     fig_opt = dict(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
