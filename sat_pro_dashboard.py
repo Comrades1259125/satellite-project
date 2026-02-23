@@ -137,19 +137,34 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     pdf.draw_precision_graph(25, 115, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
     pdf.draw_precision_graph(110, 115, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
     
-    # --- FIXED SECTION: ย่อหน้าตรงกันและใช้ไฟล์ชั่วคราว ---
+    # 📸 จุดที่ 1: ใช้ไฟล์ชั่วคราวสำหรับรูป QR
     qr_buf = generate_verified_qr(f_id)
     with open("temp_qr.png", "wb") as f:
         f.write(qr_buf.getvalue())
     pdf.image("temp_qr.png", 20, 190, 45, 60)
     
     pdf.line(105, 230, 195, 230)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 205, 30, 22)
+    
+    # 📸 จุดที่ 2: ใช้ไฟล์ชั่วคราวสำหรับรูปตราประทับ (ถ้ามี)
+    if s_img:
+        with open("temp_seal.png", "wb") as f:
+            f.write(s_img.getvalue())
+        pdf.image("temp_seal.png", 135, 205, 30, 22)
+        
     pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
     pdf.set_x(105); pdf.set_font("helvetica", 'I', 9); pdf.cell(90, 5, s_pos.upper(), align='C')
-    raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
-    writer.add_page(reader.pages[0]); writer.add_page(reader.pages[1])
-    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
+    
+    # 🔐 จุดที่ 3: แก้ไข PDF Output Type เพื่อการเข้ารหัส (Fix TypeError)
+    pdf_data = pdf.output(dest='S').encode('latin-1')
+    raw = BytesIO(pdf_data)
+    reader = PdfReader(raw)
+    writer = PdfWriter()
+    writer.add_page(reader.pages[0])
+    writer.add_page(reader.pages[1])
+    writer.encrypt(pwd)
+    final = BytesIO()
+    writer.write(final)
+    return final.getvalue()
 
 # ==========================================
 # 3. RESPONSIVE INTERFACE (iPad & Mobile)
