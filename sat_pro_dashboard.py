@@ -25,9 +25,10 @@ def init_system():
 
 sat_catalog = init_system()
 ts = load.timescale()
-geolocator = Nominatim(user_agent="v5950_ultimate_v4")
+geolocator = Nominatim(user_agent="v5950_final_fix")
 
 def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
+    # รองรับทั้งเวลาปัจจุบันและเวลาล่วงหน้า
     t_input = target_dt if target_dt else datetime.now(timezone.utc)
     t = ts.from_datetime(t_input)
     geocentric = sat_obj.at(t)
@@ -39,9 +40,8 @@ def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
     topocentric = difference.at(t)
     alt, az, distance = topocentric.altaz()
     
-    # Telemetry Logic (Health AI)
+    # Telemetry Logic
     sig_strength = max(-120, -90 - (distance.km / 150))
-    
     tele = {
         "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
         "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
@@ -50,14 +50,12 @@ def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
         "SIG_ELEV": f"{alt.degrees:.2f} DEG",
         "SIG_DIST": f"{distance.km:.2f} KM",
         "COM_SIG_DB": f"{sig_strength:.2f} dBm",
-        "EPS_TEMP": f"{22.0 + (random.uniform(-1,1)):.2f} C",
         "OBC_STATUS": "ACTIVE" if alt.degrees > -5 else "SLEEP",
-        "SYS_SYNC": "LOCKED",
-        "MISSION_PH": "PHASE-04",
-        "GEN_TIME": t_input.strftime("%H:%M:%S")
+        "GEN_TIME": t_input.strftime("%Y-%m-%d %H:%M:%S")
     }
-    for i in range(28): tele[f"AUX_DATA_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
+    for i in range(32): tele[f"DATA_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
 
+    # Historical/Tail data
     lats, lons, alts, vels = [], [], [], []
     for i in range(0, 101, 10):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
@@ -65,11 +63,11 @@ def run_calculation(sat_obj, st_lat, st_lon, target_dt=None):
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
         alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
 
-    footprint = np.sqrt(2 * 6371 * subpoint.elevation.km)
     return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
             "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
-            "FOOTPRINT": footprint, "IN_VIEW": alt.degrees > 0,
-            "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
+            "FOOTPRINT": np.sqrt(2 * 6371 * subpoint.elevation.km), 
+            "IN_VIEW": alt.degrees > 0, "TAIL_LAT": lats, "TAIL_LON": lons, 
+            "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
 # 2. HD PDF ENGINE
@@ -113,9 +111,9 @@ def build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, f_id, pwd, m):
         pdf.ln(2)
 
     pdf.add_page()
-    pdf.draw_precision_graph(20, 30, 170, 70, "ORBITAL LATITUDE TRACKING", m['TAIL_LAT'])
-    pdf.draw_precision_graph(20, 120, 80, 55, "VELOCITY (KM/H)", m['TAIL_VEL'], (180, 100, 0))
-    pdf.draw_precision_graph(110, 120, 80, 55, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 80))
+    pdf.draw_precision_graph(20, 30, 170, 70, "ORBITAL TRACKING", m['TAIL_LAT'])
+    pdf.draw_precision_graph(20, 120, 80, 55, "VELOCITY", m['TAIL_VEL'], (180, 100, 0))
+    pdf.draw_precision_graph(110, 120, 80, 55, "ALTITUDE", m['TAIL_ALT'], (0, 120, 80))
     
     qr_img = qrcode.make(f_id).convert('RGB')
     pdf.image(qr_img, x=20, y=200, w=40)
@@ -129,9 +127,9 @@ def build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, f_id, pwd, m):
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 3. INTERFACE (4-FIELD ADDRESS SYNC)
+# 3. INTERFACE (PREDICTIVE MODE + 4-ADDR)
 # ==========================================
-st.set_page_config(page_title="V5950 STABLE", layout="wide")
+st.set_page_config(page_title="V5950 COMPLETE", layout="wide")
 
 if 'show_dialog' not in st.session_state: st.session_state.show_dialog = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
@@ -146,24 +144,21 @@ with st.sidebar:
     sat_name = st.selectbox("ASSET", list(sat_catalog.keys()), on_change=reset_ui)
     
     st.subheader("📍 STATION ADDRESS")
-    # กลับมาเป็น 4 ช่องเหมือนเดิมตามคำขอ
     f1 = st.text_input("Sub-District", "Phra Borom", on_change=reset_ui)
     f2 = st.text_input("District", "Phra Nakhon", on_change=reset_ui)
     f3 = st.text_input("Province", "Bangkok", on_change=reset_ui)
     f4 = st.text_input("Country", "Thailand", on_change=reset_ui)
     addr_dict = {"sub": f1, "dist": f2, "prov": f3, "cntr": f4}
 
-    if st.button("🔍 UPDATE STATION LOCATION", use_container_width=True):
-        full_query = f"{f1}, {f2}, {f3}, {f4}"
-        loc = geolocator.geocode(full_query)
+    if st.button("🔍 UPDATE LOCATION", use_container_width=True):
+        loc = geolocator.geocode(f"{f1}, {f2}, {f3}, {f4}")
         if loc:
             st.session_state.st_lat, st.session_state.st_lon = loc.latitude, loc.longitude
-            st.success(f"SYNCED: {loc.latitude:.4f}, {loc.longitude:.4f}")
-        else:
-            st.error("Address not found. Using default coordinates.")
+            st.success("STATION SYNCED")
+        else: st.error("Address Not Found")
 
     st.divider()
-    z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
+    z1, z2, z3 = st.slider("Tactical Zoom", 1, 18, 12), st.slider("Global Zoom", 1, 10, 2), st.slider("Station Zoom", 1, 18, 15)
     
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
         st.session_state.show_dialog = True
@@ -171,13 +166,23 @@ with st.sidebar:
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
 def archive_dialog():
     if st.session_state.pdf_blob is None:
-        st.write(f"Archive for: {sat_name}")
+        # --- [SYSTEM RESTORED: PREDICTIVE MODE] ---
+        mode = st.radio("Report Time Mode", ["Live", "Predictive"], horizontal=True)
+        t_sel = None
+        if mode == "Predictive":
+            c1, c2 = st.columns(2)
+            d = c1.date_input("Target Date")
+            t = c2.time_input("Target Time")
+            t_sel = datetime.combine(d, t).replace(tzinfo=timezone.utc)
+            st.warning(f"Report will be generated for: {t_sel.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        
+        st.divider()
         s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
         s_pos = st.text_input("Position", "CHIEF COMMANDER")
-        s_img = st.file_uploader("Seal (PNG)", type=['png'])
+        s_img = st.file_uploader("Digital Seal (PNG)", type=['png'])
         
-        if st.button("🚀 INITIATE GENERATION", use_container_width=True):
-            m_data = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon)
+        if st.button("🚀 GENERATE ARCHIVE", use_container_width=True):
+            m_data = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon, t_sel)
             fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
             pwd = ''.join(random.choices(string.digits, k=6))
             st.session_state.pdf_blob = build_pdf(sat_name, addr_dict, s_name, s_pos, s_img, fid, pwd, m_data)
@@ -192,14 +197,8 @@ if st.session_state.show_dialog: archive_dialog()
 @st.fragment(run_every=1.0)
 def dashboard():
     st.markdown(f'''<div style="text-align:center; margin-bottom:20px;"><div style="display:inline-block; background:white; border:5px solid black; padding:5px 50px; border-radius:100px; color:black; font-size:45px; font-weight:bold; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</div></div>''', unsafe_allow_html=True)
-    
     m = run_calculation(sat_catalog[sat_name], st.session_state.st_lat, st.session_state.st_lon)
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("SIGNAL STATUS", "● ONLINE" if m['IN_VIEW'] else "○ STANDBY")
-    c2.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
-    c3.metric("VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
-
     m_cols = st.columns([1, 1, 1])
     def draw_map(lt, ln, zm, k, tl=[], tn=[], foot=0):
         fig = go.Figure()
