@@ -173,14 +173,20 @@ st.markdown("""
 
 clock_spot = st.empty()
 
+# --- จุดที่แก้ไข: เพิ่มฟังก์ชัน Reset สถานะเมื่อมีการพิมพ์ข้อมูลใหม่ ---
+def reset_sys():
+    st.session_state.open_sys = False
+    st.session_state.pdf_blob = None
+
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
-    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()))
+    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()), on_change=reset_sys)
     st.subheader("📍 STATION LOCATION")
-    a1 = st.text_input("Sub-District", "Phra Borom")
-    a2 = st.text_input("District", "Phra Nakhon")
-    a3 = st.text_input("Province", "Bangkok")
-    a4 = st.text_input("Country", "Thailand")
+    # เพิ่ม on_change=reset_sys เพื่อปิดป๊อปอัพทันทีที่เริ่มพิมพ์ใหม่
+    a1 = st.text_input("Sub-District", "Phra Borom", on_change=reset_sys)
+    a2 = st.text_input("District", "Phra Nakhon", on_change=reset_sys)
+    a3 = st.text_input("Province", "Bangkok", on_change=reset_sys)
+    a4 = st.text_input("Country", "Thailand", on_change=reset_sys)
     addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
     z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"): st.session_state.open_sys = True
@@ -231,7 +237,6 @@ def dashboard():
     st.subheader("🌍 GEOSPATIAL COMMAND")
     m_cols = st.columns([1, 1, 1])
     
-    # --- จุดที่แก้ไข: ล็อคการลากแผนที่ด้วยนิ้ว ---
     def draw_map(lt, ln, zm, k, tl, tn):
         fig = go.Figure()
         fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
@@ -246,9 +251,9 @@ def dashboard():
             margin=dict(l=0,r=0,t=0,b=0), 
             height=350, 
             showlegend=False,
-            dragmode=False # ปิดการลาก (Pan)
+            dragmode=False 
         )
-        st.plotly_chart(fig, use_container_width=True, key=k, config={'scrollZoom': False, 'displayModeBar': False}) # ปิดการซูมและแถบเครื่องมือ
+        st.plotly_chart(fig, use_container_width=True, key=k, config={'scrollZoom': False, 'displayModeBar': False})
         
     with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
