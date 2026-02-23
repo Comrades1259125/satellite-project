@@ -1,34 +1,19 @@
 import streamlit as st
 import plotly.graph_objects as go
-from geopy.geocoders import Nominatim # <--- ตัวเชื่อมฐานข้อมูลภายนอก
 import pandas as pd
 import numpy as np
 import random
-from datetime import datetime, timezone
+import string
+from datetime import datetime, timedelta, timezone
+from fpdf import FPDF 
+from pypdf import PdfReader, PdfWriter
+import qrcode
+from io import BytesIO
 from skyfield.api import load, wgs84
+from geopy.geocoders import Nominatim
 
 # ==========================================
-# 1. EXTERNAL DATABASE ENGINE (Geopy)
-# ==========================================
-def get_coordinates_from_api(sub, dist, prov, country):
-    # รวมชื่อที่อยู่เป็น String เดียวเพื่อไปค้นหาในฐานข้อมูลโลก
-    full_address = f"{sub}, {dist}, {prov}, {country}"
-    
-    try:
-        # เรียกใช้ Nominatim API (ฟรี)
-        geolocator = Nominatim(user_agent="v5950_satellite_tracker")
-        location = geolocator.geocode(full_address)
-        
-        if location:
-            return location.latitude, location.longitude
-        else:
-            # ถ้าหาไม่เจอ ให้คืนค่าพิกัดกลางของจังหวัด หรือกรุงเทพฯ
-            return 13.7563, 100.5018
-    except:
-        return 13.7563, 100.5018
-
-# ==========================================
-# 2. CORE SYSTEM (คงเดิม)
+# 1. CORE ENGINE & GEOPY
 # ==========================================
 @st.cache_resource
 def init_system():
@@ -38,66 +23,137 @@ def init_system():
 sat_catalog = init_system()
 ts = load.timescale()
 
-def run_calculation(sat_obj):
-    t = ts.now()
+def get_station_coords(sub, dist, prov, country):
+    full_address = f"{sub}, {dist}, {prov}, {country}"
+    try:
+        geolocator = Nominatim(user_agent="v5950_final_system")
+        location = geolocator.geocode(full_address)
+        if location: return location.latitude, location.longitude
+    except: pass
+    return 13.7563, 100.5018
+
+def run_calculation(sat_obj, target_dt=None):
+    t_input = target_dt if target_dt else datetime.now(timezone.utc)
+    t = ts.from_datetime(t_input)
     geocentric = sat_obj.at(t)
     subpoint = wgs84.subpoint(geocentric)
-    return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees}
+    v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
+    
+    # คำนวณเส้นย้อนหลัง 100 นาที (TAIL)
+    lats, lons = [], []
+    for i in range(0, 101, 10):
+        pt = ts.from_datetime(t_input - timedelta(minutes=i))
+        ps = wgs84.subpoint(sat_obj.at(pt))
+        lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
+        
+    tele = {"ALT": f"{subpoint.elevation.km:.2f} KM", "VEL": f"{v_km_s*3600:.2f} KM/H", "STATUS": "NOMINAL"}
+    
+    return {
+        "LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
+        "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
+        "TAIL_LAT": lats, "TAIL_LON": lons, "RAW_TELE": tele
+    }
 
 # ==========================================
-# 3. INTERFACE & SIDEBAR
+# 2. PDF ENGINE (กู้คืนระบบโหลด)
 # ==========================================
-st.set_page_config(page_title="V5950 EXTERNAL DB", layout="wide")
+def build_pdf(sat_name, addr, m):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", 'B', 16)
+    pdf.cell(0, 10, f"MISSION REPORT: {sat_name}", ln=True, align='C')
+    pdf.set_font("helvetica", '', 12)
+    pdf.cell(0, 10, f"STATION: {addr['sub']}, {addr['dist']}, {addr['prov']}", ln=True)
+    pdf.cell(0, 10, f"COORDINATES: {m['LAT']:.4f}, {m['LON']:.4f}", ln=True)
+    return pdf.output(dest='S').encode('latin-1')
+
+# ==========================================
+# 3. INTERFACE (3 MAPS + SIDEBAR)
+# ==========================================
+st.set_page_config(page_title="V5950 FULL RECOVERY", layout="wide")
 
 if 'st_lat' not in st.session_state:
     st.session_state.st_lat, st.session_state.st_lon = 13.7563, 100.5018
+if 'open_sys' not in st.session_state: st.session_state.open_sys = False
+
+def reset_sys():
+    st.session_state.open_sys = False
 
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
-    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()))
+    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()), on_change=reset_sys)
     
-    st.subheader("🌐 GLOBAL ADDRESS LOOKUP")
-    a1 = st.text_input("Sub-District / Place", "Phra Borom")
-    a2 = st.text_input("District / City", "Phra Nakhon")
-    a3 = st.text_input("Province / State", "Bangkok")
-    a4 = st.text_input("Country", "Thailand")
+    st.subheader("📍 STATION LOOKUP")
+    a1 = st.text_input("Sub-District", "Phra Borom", on_change=reset_sys)
+    a2 = st.text_input("District", "Phra Nakhon", on_change=reset_sys)
+    a3 = st.text_input("Province", "Bangkok", on_change=reset_sys)
+    a4 = st.text_input("Country", "Thailand", on_change=reset_sys)
+    addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
     
-    if st.button("🔍 FETCH EXTERNAL COORDINATES", use_container_width=True, type="primary"):
-        with st.spinner("Searching Global Database..."):
-            lat, lon = get_coordinates_from_api(a1, a2, a3, a4)
-            st.session_state.st_lat, st.session_state.st_lon = lat, lon
-            st.success(f"Found: {lat:.4f}, {lon:.4f}")
+    if st.button("🔍 FETCH & LOCK STATION", use_container_width=True):
+        lat, lon = get_station_coords(a1, a2, a3, a4)
+        st.session_state.st_lat, st.session_state.st_lon = lat, lon
+        st.toast("STATION UPDATED")
 
-    z3 = st.slider("Station Zoom", 1, 18, 15)
+    z1 = st.slider("Tactical Zoom", 1, 18, 12, on_change=reset_sys)
+    z2 = st.slider("Global Zoom", 1, 10, 2, on_change=reset_sys)
+    z3 = st.slider("Station Zoom", 1, 18, 15, on_change=reset_sys)
+    
+    st.markdown("---")
+    if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"): 
+        st.session_state.open_sys = True
+
+# ระบบ Pop-up รายงาน
+@st.dialog("📋 ARCHIVE ACCESS")
+def archive_dialog():
+    m_data = run_calculation(sat_catalog[sat_name])
+    pdf_blob = build_pdf(sat_name, addr_data, m_data)
+    st.write("REPORT GENERATED SUCCESSFULLY")
+    st.download_button("📥 DOWNLOAD PDF", pdf_blob, "report.pdf", use_container_width=True)
+    if st.button("CLOSE"): st.session_state.open_sys = False; st.rerun()
+
+if st.session_state.open_sys: archive_dialog()
 
 # ==========================================
-# 4. DASHBOARD (แผนที่อันที่ 3)
+# 4. DASHBOARD (แผนที่ 3 อัน + เส้น Tail)
 # ==========================================
 @st.fragment(run_every=1.0)
 def dashboard():
     m = run_calculation(sat_catalog[sat_name])
-    cols = st.columns([2, 1]) # แบ่งฝั่งดาวเทียม กับ ฝั่งสถานี
     
-    with cols[0]:
-        st.write("📡 SATELLITE LIVE TRACK")
-        fig = go.Figure(go.Scattermapbox(lat=[m['LAT']], lon=[m['LON']], marker=dict(size=15, color='red')))
+    st.subheader("🌍 GEOSPATIAL COMMAND CENTER")
+    m_cols = st.columns([1, 1, 1])
+    
+    def draw_map(lt, ln, zm, k, tl=None, tn=None, color='red'):
+        fig = go.Figure()
+        if tl and tn: # วาดเส้นสีเหลือง
+            fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
+        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color=color)))
         fig.update_layout(
-            mapbox=dict(style="white-bg", 
-                         layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
-                         center=dict(lat=m['LAT'], lon=m['LON']), zoom=3),
-            margin=dict(l=0,r=0,t=0,b=0), height=500, dragmode=False)
-        st.plotly_chart(fig, use_container_width=True, key="sat_map")
+            mapbox=dict(
+                style="white-bg", 
+                layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], 
+                center=dict(lat=lt, lon=ln), zoom=zm
+            ), margin=dict(l=0,r=0,t=0,b=0), height=400, showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True, key=k)
+        
+    with m_cols[0]:
+        st.caption("📡 TACTICAL VIEW")
+        draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
+        
+    with m_cols[1]:
+        st.caption("🌐 GLOBAL TRACK")
+        draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
+    
+    with m_cols[2]:
+        st.caption(f"🏠 STATION: {a2.upper()}")
+        draw_map(st.session_state.st_lat, st.session_state.st_lon, z3, "S1", color='cyan')
 
-    with cols[1]:
-        st.write(f"🏠 STATION LOCATION (EXTERNAL DB)")
-        # แผนที่ที่ 3 ดึงจากพิกัดที่ Fetch มาจากฐานข้อมูลภายนอก
-        fig_st = go.Figure(go.Scattermapbox(lat=[st.session_state.st_lat], lon=[st.session_state.st_lon], 
-                                            marker=dict(size=20, color='cyan')))
-        fig_st.update_layout(
-            mapbox=dict(style="white-bg", 
-                         layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
-                         center=dict(lat=st.session_state.st_lat, lon=st.session_state.st_lon), zoom=z3),
-            margin=dict(l=0,r=0,t=0,b=0), height=500, dragmode=False)
-        st.plotly_chart(fig_st, use_container_width=True, key="st_map")
+    # Telemetry Metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("LATITUDE", f"{m['LAT']:.4f}")
+    c2.metric("LONGITUDE", f"{m['LON']:.4f}")
+    c3.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
 
 dashboard()
