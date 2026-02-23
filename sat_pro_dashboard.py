@@ -137,7 +137,7 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     pdf.draw_precision_graph(25, 115, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
     pdf.draw_precision_graph(110, 115, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
     qr_buf = generate_verified_qr(f_id)
-    pdf.image(qr_buf, 20, 190, 45, 60)
+    pdf.image(qr_buf, x=20, y=190, w=45, h=60, type='PNG')
     pdf.line(105, 230, 195, 230)
     if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 205, 30, 22)
     pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
