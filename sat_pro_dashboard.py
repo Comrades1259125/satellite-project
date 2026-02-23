@@ -173,7 +173,6 @@ st.markdown("""
 
 clock_spot = st.empty()
 
-# ฟังก์ชัน Reset สถานะ
 def reset_sys():
     st.session_state.open_sys = False
     st.session_state.pdf_blob = None
@@ -188,12 +187,10 @@ with st.sidebar:
     a4 = st.text_input("Country", "Thailand", on_change=reset_sys)
     addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
     
-    # 📍 เพิ่มปุ่มยืนยันตำแหน่ง
     if st.button("📍 CONFIRM LOCATION", use_container_width=True):
         st.toast("STATION LOCATION UPDATED")
         reset_sys()
 
-    # เพิ่ม on_change ใน Slider เพื่อกันหน้าดาวน์โหลดเด้งตอนซูม
     z1 = st.slider("Tactical", 1, 18, 12, on_change=reset_sys)
     z2 = st.slider("Global", 1, 10, 2, on_change=reset_sys)
     z3 = st.slider("Station", 1, 18, 15, on_change=reset_sys)
@@ -267,7 +264,9 @@ def dashboard():
         
     with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[2]: draw_map(13.75, 100.5, z3, "S1", [], [])
+    
+    # --- จุดที่แก้ไข: เปลี่ยนพิกัดแผนที่ S1 ให้ตามพิกัดปัจจุบัน (ไม่ล็อคที่กรุงเทพฯ แล้ว) ---
+    with m_cols[2]: draw_map(m['LAT'], m['LON'], z3, "S1", [], [])
 
     st.subheader("📊 PERFORMANCE ANALYTICS")
     g_cols = st.columns([1, 1])
