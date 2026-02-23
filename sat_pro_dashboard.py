@@ -40,7 +40,6 @@ def run_calculation(sat_obj, target_dt=None):
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
     
-    # คำนวณเส้นย้อนหลัง (Tail) 100 นาที
     lats, lons, alts, vels = [], [], [], []
     for i in range(0, 101, 10):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
@@ -48,7 +47,6 @@ def run_calculation(sat_obj, target_dt=None):
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
         alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
     
-    # จำลองค่า Telemetry ให้เหมือนโค้ดต้นฉบับ
     tele = {
         "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
         "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
@@ -58,7 +56,7 @@ def run_calculation(sat_obj, target_dt=None):
         "COM_MODE": "ENCRYPTED",
         "SYS_SYNC": "LOCKED",
         "MISSION_PH": "PHASE-04",
-        "GEN_TIME": "REAL-TIME"
+        "GEN_TIME": datetime.now().strftime("%H:%M:%S")
     }
     
     return {
@@ -70,18 +68,13 @@ def run_calculation(sat_obj, target_dt=None):
     }
 
 # ==========================================
-# 2. HD PDF & QR ENGINE (ตามโค้ดต้นฉบับ)
+# 2. HD PDF & QR ENGINE (FIXED)
 # ==========================================
 def generate_verified_qr(data_text):
     qr = qrcode.QRCode(border=2)
     qr.add_data(data_text); qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-    w, h = img.size
-    canvas = Image.new('RGB', (w + 40, h + 90), 'white')
-    draw = ImageDraw.Draw(canvas)
-    draw.text((w/2 + 20, h + 55), "VERIFIED ARCHIVE", fill="black", anchor="mm")
-    canvas.paste(img, (20, 15))
-    buf = BytesIO(); canvas.save(buf, format="PNG"); return buf
+    buf = BytesIO(); img.save(buf, format="PNG"); return buf
 
 class ENGINEERING_PDF(FPDF):
     def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
@@ -100,24 +93,36 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 24); pdf.cell(0, 12, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
     pdf.set_font("helvetica", 'B', 14); pdf.cell(0, 10, f"ARCHIVE ID: {f_id}", ln=True, align='C')
-    pdf.ln(10)
+    pdf.ln(5)
+    pdf.set_font("helvetica", '', 10); pdf.cell(0, 8, f"LOCATION: {addr['sub']}, {addr['dist']}, {addr['prov']}".upper(), ln=True, align='C')
+    
+    # Graphs
     pdf.draw_precision_graph(25, 60, 160, 65, "ORBITAL TRACKING", m['TAIL_LAT'])
     
+    # QR Code (Fixed AttributeError)
     qr_buf = generate_verified_qr(f_id)
-    pdf.image(qr_buf, 20, 190, 45, 60)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 205, 30, 22)
+    pdf.image(qr_buf, x=20, y=190, w=45, h=45) 
+    
+    # Seal & Signature
+    pdf.line(105, 230, 195, 230)
+    if s_img:
+        s_buf = BytesIO(s_img.getvalue())
+        pdf.image(s_buf, x=135, y=205, w=30)
     
     pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
+    pdf.set_x(105); pdf.set_font("helvetica", 'I', 9); pdf.cell(90, 5, s_pos.upper(), align='C')
     
-    raw = BytesIO(pdf.output(dest='S').encode('latin-1'))
-    reader = PdfReader(raw); writer = PdfWriter()
+    # Encrypt
+    raw_pdf = BytesIO(pdf.output())
+    reader = PdfReader(raw_pdf); writer = PdfWriter()
     writer.add_page(reader.pages[0])
-    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
+    writer.encrypt(pwd)
+    final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
 # 3. INTERFACE
 # ==========================================
-st.set_page_config(page_title="V5950 ULTIMATE", layout="wide")
+st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
 
 if 'st_lat' not in st.session_state: st.session_state.st_lat, st.session_state.st_lon = 13.7563, 100.5018
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
@@ -142,6 +147,7 @@ with st.sidebar:
     z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
     
     if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
+        st.session_state.pdf_blob = None # รีเซ็ตไฟล์เก่า
         st.session_state.open_sys = True
 
 @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
@@ -151,20 +157,33 @@ def archive_dialog():
         s_pos = st.text_input("Position", "CHIEF COMMANDER")
         s_img = st.file_uploader("Seal (PNG)", type=['png'])
         if st.button("🚀 INITIATE", use_container_width=True):
-            fid = f"REF-{random.randint(100, 999)}"
+            fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
             pwd = ''.join(random.choices(string.digits, k=6))
             m_data = run_calculation(sat_catalog[sat_name])
             st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
             st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
     else:
-        st.markdown(f'<div style="background:white; border:4px solid black; padding:20px; text-align:center; color:black;">ID: {st.session_state.m_id}<br><b>PASS: {st.session_state.m_pwd}</b></div>', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
-        if st.button("RETURN"): st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
+        # ระบบโชว์ ID และ PASS แบบตัวหนาชัดเจน
+        st.markdown(f"""
+            <div style="background:white; border:5px solid black; padding:30px; text-align:center; color:black; border-radius:10px;">
+                <p style="margin:0; font-size:16px;">ARCHIVE ID</p>
+                <h2 style="margin:0; color:blue;">{st.session_state.m_id}</h2>
+                <hr style="border:1px solid #eee;">
+                <p style="margin:0; font-size:16px;">PASSCODE</p>
+                <h1 style="margin:0; font-size:45px; letter-spacing:5px;">{st.session_state.m_pwd}</h1>
+            </div>
+        """, unsafe_allow_html=True)
+        st.ln(1)
+        st.download_button("📥 DOWNLOAD ENCRYPTED PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
+        if st.button("RETURN / RESET"): 
+            st.session_state.open_sys = False
+            st.session_state.pdf_blob = None
+            st.rerun()
 
 if st.session_state.open_sys: archive_dialog()
 
 # ==========================================
-# 4. DASHBOARD
+# 4. DASHBOARD (3 MAPS + TAIL)
 # ==========================================
 @st.fragment(run_every=1.0)
 def dashboard():
@@ -183,6 +202,7 @@ def dashboard():
     with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
     with m_cols[2]: draw_map(st.session_state.st_lat, st.session_state.st_lon, z3, "S1", color='cyan')
 
+    # Telemetry Table
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+3] for i in range(0, 9, 3)]))
 
 dashboard()
