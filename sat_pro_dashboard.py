@@ -57,39 +57,19 @@ def run_calculation(sat_obj, target_dt=None):
         history["alts"].append(s.elevation.km)
     return data, history
 
-# ==========================================
-# 📊 NEW: HIGH-DETAIL GRAPH ENGINE
-# ==========================================
 class ULTIMATE_PDF(FPDF):
     def draw_detailed_grid_graph(self, x, y, w, h, title, data, color, unit):
-        # พื้นหลังและกรอบ
         self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
         self.set_draw_color(200, 200, 200); self.set_line_width(0.1)
-        
-        # วาดเส้น Grid (แนวตั้ง 10 ช่อง, แนวนอน 5 ช่อง)
-        for i in range(11): # แนวตั้ง (Time steps)
-            lx = x + (i * (w / 10))
-            self.line(lx, y, lx, y + h)
-        for i in range(6): # แนวนอน (Value ranges)
-            ly = y + (i * (h / 5))
-            self.line(x, ly, x + w, ly)
-
-        # ข้อมูลแกน
-        min_v, max_v = min(data), max(data)
-        v_range = (max_v - min_v) if max_v != min_v else 1
-        
-        # วาดตัวเลขกำกับแกน Y (5 จุด)
+        for i in range(11): lx = x + (i * (w / 10)); self.line(lx, y, lx, y + h)
+        for i in range(6): ly = y + (i * (h / 5)); self.line(x, ly, x + w, ly)
+        min_v, max_v = min(data), max(data); v_range = (max_v - min_v) if max_v != min_v else 1
         self.set_font("Arial", '', 6); self.set_text_color(100)
         for i in range(6):
             val = max_v - (i * (v_range / 5))
-            self.set_xy(x - 12, y + (i * (h / 5)) - 1.5)
-            self.cell(10, 3, f"{val:.1f}", align='R')
-
-        # หัวข้อกราฟ
+            self.set_xy(x - 12, y + (i * (h / 5)) - 1.5); self.cell(10, 3, f"{val:.1f}", align='R')
         self.set_font("Arial", 'B', 9); self.set_text_color(0)
         self.set_xy(x, y - 6); self.cell(w, 5, f"{title} ({unit})", align='L')
-
-        # วาดเส้นข้อมูล (High Precision)
         if len(data) > 1:
             pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
             self.set_draw_color(*color); self.set_line_width(0.5)
@@ -97,7 +77,6 @@ class ULTIMATE_PDF(FPDF):
 
 def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
     pdf = ULTIMATE_PDF()
-    # --- หน้าที่ 1 (ห้ามตัด) ---
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, "MISSION STRATEGIC DATA - PAGE 1", ln=True, align='C')
     pdf.set_font("Arial", 'B', 8); addr_txt = f"ZONE: {addr['z']} | COUNTRY: {addr['c']} | PROV: {addr['p']} | DIST: {addr['d']} | SUB: {addr['s']}"
@@ -108,16 +87,12 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
         for j in range(4):
             if i+j < len(items): pdf.cell(47.5, 8, f"{items[i+j][0]}: {items[i+j][1]}", border=1)
         pdf.ln()
-
-    # --- หน้าที่ 2 (กราฟละเอียด) ---
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, "PRECISION ANALYTICS - PAGE 2", ln=True, align='C')
     pdf.ln(10)
     pdf.draw_detailed_grid_graph(20, 40, 170, 45, "LATITUDE TRAJECTORY", m_hist["lats"], (0, 102, 204), "DEG")
     pdf.draw_detailed_grid_graph(20, 105, 170, 45, "ORBITAL VELOCITY", m_hist["vels"], (204, 0, 0), "KM/H")
     pdf.draw_detailed_grid_graph(20, 170, 170, 45, "ALTITUDE VARIATION", m_hist["alts"], (0, 153, 51), "KM")
-    
-    # QR & Sign (ห้ามเปลี่ยน)
     pdf.set_draw_color(0); pdf.rect(15, 235, 40, 45)
     qr = qrcode.make(f_id).convert('RGB'); q_buf = BytesIO(); qr.save(q_buf, format="PNG")
     pdf.image(q_buf, 17.5, 237, 35, 35)
@@ -126,16 +101,13 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
     pdf.line(120, 265, 190, 265); pdf.set_xy(120, 267); pdf.set_font("Arial", 'B', 10); 
     pdf.cell(70, 5, s_name.upper() if s_name else "DIRECTOR", align='C', ln=True)
     pdf.set_x(120); pdf.set_font("Arial", 'I', 8); pdf.cell(70, 5, s_pos.upper() if s_pos else "COMMANDER", align='C')
-    
     raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
     for p in reader.pages: writer.add_page(p)
     writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
-# --- UI (ห้ามยุ่ง ห้ามตัด) ---
-st.set_page_config(page_title="ZENITH V8.7", layout="wide")
-if 'show_modal' not in st.session_state: st.session_state.show_modal = False
-if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
+st.set_page_config(page_title="ZENITH V8.8", layout="wide")
 
+# --- UI CONTROLS ---
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
     sel_sat = st.selectbox("ACTIVE ASSET", list(sat_catalog.keys()))
@@ -145,31 +117,37 @@ with st.sidebar:
     loc_info = LOC_DB.get(p_a); st_lat, st_lon, st_tz = loc_info["lat"], loc_info["lon"], loc_info["tz"]
     st.divider()
     z1 = st.slider("Tactical", 1, 18, 12, key="z1"); z2 = st.slider("Global", 1, 10, 2, key="z2"); z3 = st.slider("Station", 1, 18, 15, key="z3")
-    if st.button("🧧 GENERATE MISSION ARCHIVE", use_container_width=True, type="primary"): st.session_state.show_modal = True
 
-@st.dialog("📋 ARCHIVE ACCESS CONTROL")
-def modal():
-    if st.session_state.pdf_blob is None:
-        mode = st.radio("Analytics", ["Live Stream", "Predictive Orbit"], horizontal=True)
-        t_target = None
-        if mode == "Predictive Orbit":
-            c1, c2 = st.columns(2); t_target = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
-        s_name, s_pos = st.text_input("Officer Name"), st.text_input("Designation")
-        s_img = st.file_uploader("Seal (PNG)", type=['png'])
-        if st.button("🚀 EXECUTE ENCRYPTION"):
-            fid = f"REF-{random.randint(100,999)}-{datetime.now().strftime('%m%d')}"
-            pwd = "".join([str(random.randint(0,9)) for _ in range(6)])
-            m_main, m_hist = run_calculation(sat_catalog[sel_sat], t_target)
-            addr = {"z": z_a, "c": c_a, "p": p_a, "d": d_a, "s": s_a}
-            st.session_state.pdf_blob = build_pdf(sel_sat, addr, s_name, s_pos, s_img, fid, pwd, m_main, m_hist)
-            st.session_state.fid, st.session_state.pwd = fid, pwd
-            st.rerun()
-    else:
-        st.markdown(f'<div style="border:4px solid black; padding:25px; border-radius:15px; text-align:center; background:white; color:black;"><p style="color:gray;">ARCHIVE ID</p><h2 style="color:red; font-weight:900;">{st.session_state.fid}</h2><hr><p style="color:gray;">PASSKEY</p><h1 style="font-weight:900; letter-spacing:15px;">{st.session_state.pwd}</h1></div>', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.fid}.pdf", use_container_width=True)
-        if st.button("RETURN"): st.session_state.show_modal = False; st.session_state.pdf_blob = None; st.rerun()
+    # FIX: เรียก Dialog ตรงๆ จากปุ่มเท่านั้น ห้ามเก็บค่าลง session state แบบถาวร
+    @st.dialog("📋 MISSION DATA ARCHIVE")
+    def mission_modal():
+        if "pdf_ready" not in st.session_state: st.session_state.pdf_ready = False
+        
+        if not st.session_state.pdf_ready:
+            mode = st.radio("Analytics", ["Live Stream", "Predictive Orbit"], horizontal=True)
+            t_target = None
+            if mode == "Predictive Orbit":
+                c1, c2 = st.columns(2); t_target = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
+            s_name, s_pos = st.text_input("Officer Name"), st.text_input("Designation")
+            s_img = st.file_uploader("Seal (PNG)", type=['png'])
+            if st.button("🚀 EXECUTE ENCRYPTION"):
+                fid = f"REF-{random.randint(100,999)}-{datetime.now().strftime('%m%d')}"
+                pwd = "".join([str(random.randint(0,9)) for _ in range(6)])
+                m_main, m_hist = run_calculation(sat_catalog[sel_sat], t_target)
+                addr = {"z": z_a, "c": c_a, "p": p_a, "d": d_a, "s": s_a}
+                st.session_state.temp_pdf = build_pdf(sel_sat, addr, s_name, s_pos, s_img, fid, pwd, m_main, m_hist)
+                st.session_state.temp_fid, st.session_state.temp_pwd = fid, pwd
+                st.session_state.pdf_ready = True
+                st.rerun()
+        else:
+            st.markdown(f'<div style="border:4px solid black; padding:20px; text-align:center;">ID: <h2 style="color:red;">{st.session_state.temp_fid}</h2>PASS: <h1 style="letter-spacing:10px;">{st.session_state.temp_pwd}</h1></div>', unsafe_allow_html=True)
+            st.download_button("📥 DOWNLOAD PDF", st.session_state.temp_pdf, f"{st.session_state.temp_fid}.pdf", use_container_width=True)
+            if st.button("CLOSE"): 
+                del st.session_state.pdf_ready
+                st.rerun()
 
-if st.session_state.show_modal: modal()
+    if st.button("🧧 GENERATE MISSION ARCHIVE", use_container_width=True, type="primary"):
+        mission_modal()
 
 @st.fragment(run_every=1.0)
 def main_dashboard():
