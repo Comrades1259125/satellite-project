@@ -34,8 +34,8 @@ def run_calculation(sat_obj, target_dt=None):
     geocentric = sat_obj.at(t)
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
-    tele = {"TRK_LAT": subpoint.latitude.degrees, "TRK_LON": subpoint.longitude.degrees,
-            "TRK_ALT": subpoint.elevation.km, "TRK_VEL": v_km_s * 3600}
+    tele = {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
+            "ALTITUDE": subpoint.elevation.km, "VELOCITY": v_km_s * 3600}
     history = {"lats": [], "lons": [], "vels": [], "alts": []}
     for i in range(0, 101, 5):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
@@ -86,11 +86,10 @@ def build_ultimate_archive(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_ma
     writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
 # ==========================================
-# 3. INTERFACE (แก้ไขจุดที่เด้งเอง)
+# 3. INTERFACE (แก้ไขจุดที่ Error และเรื่องเด้ง)
 # ==========================================
-st.set_page_config(page_title="ZENITH V8.2", layout="wide")
+st.set_page_config(page_title="ZENITH V8.3", layout="wide")
 
-# FIX: บังคับให้หน้าดาวน์โหลดปิดเสมอเมื่อเริ่ม App (ป้องกันการเด้งเองตอนเข้าเว็บ)
 if 'show_modal' not in st.session_state: 
     st.session_state.show_modal = False
 if 'pdf_blob' not in st.session_state: 
@@ -111,15 +110,13 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🔍 MULTI-ZOOM")
-    z1 = st.slider("Tactical", 1, 18, 12, key="zoom_1")
-    z2 = st.slider("Global", 1, 10, 2, key="zoom_2")
-    z3 = st.slider("Station", 1, 18, 15, key="zoom_3")
+    z1 = st.slider("Tactical", 1, 18, 12, key="z1")
+    z2 = st.slider("Global", 1, 10, 2, key="z2")
+    z3 = st.slider("Station", 1, 18, 15, key="z3")
     
-    # TRIGGER: ป๊อปอัพจะเปิดเมื่อกดปุ่มนี้เท่านั้น
     if st.button("🧧 EXECUTE SECURE ARCHIVE", use_container_width=True, type="primary"):
         st.session_state.show_modal = True
 
-# MODAL ฟังก์ชัน (เรียกใช้เฉพาะเมื่อถูก Trigger)
 @st.dialog("📋 ARCHIVE FINALIZATION")
 def modal():
     if st.session_state.pdf_blob is None:
@@ -159,7 +156,6 @@ def modal():
             st.session_state.pdf_blob = None
             st.rerun()
 
-# แก้ไขจุดที่ทำให้เด้งเอง: ใส่เงื่อนไขครอบคลุมการเรียกใช้ Dialog
 if st.session_state.show_modal:
     modal()
 
@@ -173,9 +169,9 @@ def main_dashboard():
     if sat_catalog and sel_sat in sat_catalog:
         m_main, m_hist = run_calculation(sat_catalog[sel_sat])
         c1, c2, c3 = st.columns(3)
-        c1.metric("ALTITUDE", f"{m_main['TRK_ALT']:,.2f} KM")
-        c2.metric("VELOCITY", f"{m_main['TRK_VEL']:,.0f} KM/H")
-        c3.metric("COORD", f"{m_main['TRK_LAT']:.4f}, {m_main['TRK_LON']:.4f}")
+        c1.metric("ALTITUDE", f"{m_main['ALTITUDE']:,.2f} KM")
+        c2.metric("VELOCITY", f"{m_main['VELOCITY']:,.0f} KM/H")
+        c3.metric("COORD", f"{m_main['LAT']:.4f}, {m_main['LON']:.4f}")
         
         m_cols = st.columns(3)
         def draw_map(lt, ln, zm, k, tl, tn, label):
@@ -186,11 +182,15 @@ def main_dashboard():
             fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=380, showlegend=False)
             st.plotly_chart(fig, use_container_width=True, key=k)
 
-        with m_cols[0]: draw_map(m_main['TRK_LAT'], m_main['TRK_LON'], z1, "m1", m_hist["lats"], m_hist["lons"], "TACTICAL VIEW")
-        with m_cols[1]: draw_map(m_main['TRK_LAT'], m_main['TRK_LON'], z2, "m2", m_hist["lats"], m_hist["lons"], "GLOBAL ORBIT")
+        with m_cols[0]: draw_map(m_main['LAT'], m_main['LON'], z1, "m1", m_hist["lats"], m_hist["lons"], "TACTICAL VIEW")
+        with m_cols[1]: draw_map(m_main['LAT'], m_main['LON'], z2, "m2", m_hist["lats"], m_hist["lons"], "GLOBAL ORBIT")
         with m_cols[2]: draw_map(st_lat, st_lon, z3, "m3", [], [], f"STATION: {p_a}")
 
+        # FIX: แก้ไขการสร้าง DataFrame เพื่อป้องกัน ArrowTypeError
         st.subheader("📊 REAL-TIME TELEMETRY STREAM")
-        st.table(pd.DataFrame([list(m_main.items()) + [("STATUS", "SECURE")] for _ in range(1)]))
+        # สร้างตารางโดยระบุ Column ให้ชัดเจน ป้องกัน Error
+        tele_df = pd.DataFrame([m_main])
+        tele_df["STATUS"] = "SECURE"
+        st.table(tele_df)
 
 main_dashboard()
