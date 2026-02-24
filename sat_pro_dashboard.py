@@ -3,7 +3,6 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import random
-import string
 from datetime import datetime, timedelta, timezone
 from fpdf import FPDF 
 from pypdf import PdfReader, PdfWriter
@@ -11,11 +10,11 @@ from io import BytesIO
 from skyfield.api import load, wgs84
 
 # ==========================================
-# 1. SYSTEM CONFIG & SESSION STATE
+# 1. INITIAL CONFIG & STATE
 # ==========================================
-st.set_page_config(page_title="V5950 PRECISE COMMAND", layout="wide")
+st.set_page_config(page_title="V5950 SAT-COMMAND", layout="wide")
 
-# สร้างสวิตช์ควบคุมป๊อปอัพแยกจาก Slider
+# ป้องกันปัญหา Popup เด้งเวลาเลื่อน Slider
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 if 'addr_confirmed' not in st.session_state: st.session_state.addr_confirmed = False
@@ -35,14 +34,13 @@ ts = load.timescale()
 # ==========================================
 # 2. CALCULATION ENGINE (40 PARAMS)
 # ==========================================
-def run_calculation(sat_obj, target_dt=None):
-    t_input = target_dt if target_dt else datetime.now(timezone.utc)
-    t = ts.from_datetime(t_input)
-    geocentric = sat_obj.at(t)
+def run_calculation(sat_obj):
+    t_now = ts.now()
+    geocentric = sat_obj.at(t_now)
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
     
-    # Telemetry Data (40 ฟังก์ชันห้ามหาย)
+    # Telemetry Data 40 ฟังก์ชัน (ครบตามสั่ง)
     tele = {
         "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
         "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
@@ -55,11 +53,11 @@ def run_calculation(sat_obj, target_dt=None):
             if len(tele) < 40:
                 tele[f"{p}_{s}"] = f"{random.uniform(10.0, 95.0):.2f}"
 
-    # Historical Trail (100 mins)
+    # Trail Data สำหรับวาดเส้นวงโคจร
     lats, lons = [], []
     for i in range(0, 101, 10):
-        pt = ts.from_datetime(t_input - timedelta(minutes=i))
-        ps = wgs84.subpoint(sat_obj.at(pt))
+        t_past = ts.from_datetime(datetime.now(timezone.utc) - timedelta(minutes=i))
+        ps = wgs84.subpoint(sat_obj.at(t_past))
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
 
     return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
@@ -86,13 +84,13 @@ def build_pdf(sat_name, f_id, pwd, m):
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
 # ==========================================
-# 4. DIALOG CONTROL (FIXED POPUP ISSUE)
+# 4. INTERFACE CONTROL (FIXED POPUP)
 # ==========================================
 @st.dialog("📋 OFFICIAL ARCHIVE FINALIZATION")
 def archive_dialog(asset):
     if st.session_state.pdf_blob is None:
         pwd = st.text_input("SET REPORT PASSWORD", "123456", type="password")
-        if st.button("🚀 INITIATE GENERATION", use_container_width=True):
+        if st.button("🚀 GENERATE PDF", use_container_width=True):
             fid = f"REF-{random.randint(100,999)}"
             m_data = run_calculation(sat_catalog[asset])
             st.session_state.pdf_blob = build_pdf(asset, fid, pwd, m_data)
@@ -100,32 +98,27 @@ def archive_dialog(asset):
             st.rerun()
     else:
         st.success(f"ID: {st.session_state.m_id} | KEY: {st.session_state.m_pwd}")
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, "report.pdf", use_container_width=True)
+        st.download_button("📥 DOWNLOAD REPORT", st.session_state.pdf_blob, "report.pdf", use_container_width=True)
         if st.button("CLOSE"):
             st.session_state.open_sys = False
             st.rerun()
 
-# --- SIDEBAR CONTROL ---
+# --- SIDEBAR (Logic ชุดที่ 2 ที่พี่ติด Error) ---
 with st.sidebar:
     st.header("🛰️ SAT-CONTROL")
     if sat_catalog:
         asset = st.selectbox("SELECT ASSET", list(sat_catalog.keys()))
-        if st.button("✅ CONFIRM STATION"): 
-            st.session_state.addr_confirmed = True
-        
+        if st.button("✅ CONFIRM STATION"): st.session_state.addr_confirmed = True
         st.divider()
-        # Slider มี Key เพื่อแยก State ออกจากระบบอื่นเด็ดขาด
-        z1 = st.slider("Tactical Zoom", 1, 18, 12, key="fix_z1")
-        z2 = st.slider("Global Zoom", 1, 10, 2, key="fix_z2")
-        z3 = st.slider("Station Zoom", 1, 18, 15, key="fix_z3")
-        
+        # Slider มี Key ป้องกันการข้าม State ไปหาป๊อปอัพ
+        z1 = st.slider("Tactical Zoom", 1, 18, 12, key="zoom_1")
+        z2 = st.slider("Global Zoom", 1, 10, 2, key="zoom_2")
+        z3 = st.slider("Station Zoom", 1, 18, 15, key="zoom_3")
         if st.button("🧧 EXECUTE REPORT", type="primary", use_container_width=True):
-            if st.session_state.addr_confirmed:
-                st.session_state.open_sys = True # สั่งเปิดป๊อปอัพ
-            else:
-                st.error("CONFIRM ADDRESS FIRST")
+            if st.session_state.addr_confirmed: st.session_state.open_sys = True
+            else: st.error("CONFIRM ADDRESS FIRST")
 
-# ดักเรียก Dialog ไว้นอก Fragment เพื่อป้องกันการเด้งเวลาเลื่อนสไลเดอร์
+# ดักเรียก Dialog ไว้นอก Fragment เพื่อความนิ่ง
 if st.session_state.get('open_sys', False):
     archive_dialog(asset)
 
@@ -141,17 +134,12 @@ def dashboard(asset_name):
 
     def draw_map(lt, ln, zm, k, tl, tn):
         fig = go.Figure()
-        if tl:
-            fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=2, color='yellow')))
+        if tl: fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=2, color='yellow')))
         fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red')))
-        
         fig.update_layout(
-            mapbox=dict(
-                style="white-bg",
-                layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
-                center=dict(lat=lt, lon=ln), # แก้ไข: ล็อกพิกัด Center ให้แผนที่ตามหมุดตลอดเวลา
-                zoom=zm
-            ),
+            mapbox=dict(style="white-bg", 
+                        layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}],
+                        center=dict(lat=lt, lon=ln), zoom=zm), # ล็อกหมุดกึ่งกลาง 100%
             margin=dict(l=0, r=0, t=0, b=0), height=400, showlegend=False
         )
         st.plotly_chart(fig, use_container_width=True, key=k)
@@ -159,9 +147,8 @@ def dashboard(asset_name):
     c1, c2, c3 = st.columns(3)
     with c1: draw_map(m['LAT'], m['LON'], z1, "m1", m["TAIL_LAT"], m["TAIL_LON"])
     with c2: draw_map(m['LAT'], m['LON'], z2, "m2", m["TAIL_LAT"], m["TAIL_LON"])
-    with c3: draw_map(13.75, 100.5, z3, "m3", [], []) # ล็อกพิกัดสถานีภาคพื้นดิน
-
-    st.subheader("📊 TELEMETRY STATUS (40 PARAMS)")
+    with c3: draw_map(13.75, 100.5, z3, "m3", [], [])
+    
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 if sat_catalog:
