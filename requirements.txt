@@ -2,9 +2,8 @@ streamlit
 plotly
 pandas
 numpy
+skyfield
 fpdf2
 pypdf
 qrcode
-skyfield
-geopy
-Pillow
+pillow
