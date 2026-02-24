@@ -1,4 +1,4 @@
-import streamlit as st  # บรรทัดนี้สำคัญที่สุด ต้องอยู่บนสุด
+import streamlit as st  # บรรทัดที่ 1 ต้องเป็นอันนี้เท่านั้น!
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
@@ -10,11 +10,12 @@ from fpdf import FPDF
 from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 from skyfield.api import load, wgs84
-from PIL import Image, ImageDraw
 
 # ==========================================
-# 1. CORE ENGINE & SESSION STATE (SETUP)
+# 1. SETUP & SESSION STATE (ห้ามย้ายลำดับ)
 # ==========================================
+st.set_page_config(page_title="V5950 PRECISE COMMAND", layout="wide")
+
 if 'open_sys' not in st.session_state: st.session_state.open_sys = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 if 'addr_confirmed' not in st.session_state: st.session_state.addr_confirmed = False
@@ -28,6 +29,9 @@ def init_system():
 sat_catalog = init_system()
 ts = load.timescale()
 
+# ==========================================
+# 2. CORE LOGIC FUNCTIONS
+# ==========================================
 def generate_strict_id():
     p1 = "".join(random.choices(string.digits, k=3))
     p2 = "".join(random.choices(string.digits + string.ascii_uppercase, k=5))
@@ -41,7 +45,7 @@ def run_calculation(sat_obj, target_dt=None):
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
     
-    # 40 Telemetry Params
+    # 40 Telemetry Functions
     tele = {"TRK_LAT": f"{subpoint.latitude.degrees:.4f}", "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
             "TRK_ALT": f"{subpoint.elevation.km:.2f} KM", "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H"}
     prefixes = ["EPS", "ADC", "OBC", "TCS", "RCS", "PLD", "COM", "BUS"]
@@ -61,7 +65,7 @@ def run_calculation(sat_obj, target_dt=None):
             "RAW_TELE": tele, "TIME": t_input}
 
 # ==========================================
-# 2. PDF & DIALOG ENGINE
+# 3. PDF ENGINE
 # ==========================================
 class ENGINEERING_PDF(FPDF):
     def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
@@ -93,6 +97,9 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     for p in reader.pages: writer.add_page(p)
     writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
 
+# ==========================================
+# 4. DIALOG & INTERFACE
+# ==========================================
 @st.dialog("📋 OFFICIAL ARCHIVE FINALIZATION")
 def archive_dialog(sat_name, addr_data):
     if st.session_state.pdf_blob is None:
@@ -109,28 +116,33 @@ def archive_dialog(sat_name, addr_data):
         st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
         if st.button("CLOSE"): st.session_state.open_sys = False; st.rerun()
 
-# ==========================================
-# 3. INTERFACE & DASHBOARD (STABLE)
-# ==========================================
-st.set_page_config(page_title="V5950 PRECISE", layout="wide")
-
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
-    asset = st.selectbox("SELECT ASSET", list(sat_catalog.keys()))
-    a1, a2, a3 = st.text_input("Sub-District", "Phra Borom"), st.text_input("District", "Phra Nakhon"), st.text_input("Province", "Bangkok")
-    addr_data = {"sub": a1, "dist": a2, "prov": a3}
-    if st.button("✅ CONFIRM ADDRESS", use_container_width=True): st.session_state.addr_confirmed = True
-    st.divider()
-    z1 = st.slider("Tactical Zoom", 1, 18, 12, key="fix_z1")
-    z2 = st.slider("Global Zoom", 1, 10, 2, key="fix_z2")
-    z3 = st.slider("Station Zoom", 1, 18, 15, key="fix_z3")
-    if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
-        if st.session_state.addr_confirmed: st.session_state.open_sys = True
-        else: st.error("CONFIRM ADDRESS FIRST")
+    if sat_catalog:
+        asset = st.selectbox("SELECT ASSET", list(sat_catalog.keys()))
+        a1 = st.text_input("Sub-District", "Phra Borom")
+        a2 = st.text_input("District", "Phra Nakhon")
+        a3 = st.text_input("Province", "Bangkok")
+        addr_data = {"sub": a1, "dist": a2, "prov": a3}
+        if st.button("✅ CONFIRM ADDRESS", use_container_width=True): 
+            st.session_state.addr_confirmed = True
+        st.divider()
+        # แถบซูมพร้อม Key ป้องกันป๊อปอัพเด้ง
+        z1 = st.slider("Tactical Zoom", 1, 18, 12, key="fix_z1")
+        z2 = st.slider("Global Zoom", 1, 10, 2, key="fix_z2")
+        z3 = st.slider("Station Zoom", 1, 18, 15, key="fix_z3")
+        if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"):
+            if st.session_state.addr_confirmed: st.session_state.open_sys = True
+            else: st.error("CONFIRM ADDRESS FIRST")
+    else: st.error("DATABASE OFFLINE")
 
+# เรียกใช้ป๊อปอัพเฉพาะตอนที่ open_sys เป็น True
 if st.session_state.get('open_sys', False):
     archive_dialog(asset, addr_data)
 
+# ==========================================
+# 5. LIVE DASHBOARD (STABLE FRAGMENT)
+# ==========================================
 @st.fragment(run_every=1.0)
 def dashboard(sat_name):
     m = run_calculation(sat_catalog[sat_name])
@@ -141,7 +153,10 @@ def dashboard(sat_name):
         fig = go.Figure()
         if tl: fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=2, color='yellow')))
         fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red')))
-        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=400)
+        fig.update_layout(mapbox=dict(style="white-bg", 
+                                     layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], 
+                                     center=dict(lat=lt, lon=ln), zoom=zm), 
+                         margin=dict(l=0,r=0,t=0,b=0), height=400)
         st.plotly_chart(fig, use_container_width=True, key=k)
 
     with cols[0]: draw_map(m['LAT'], m['LON'], z1, "m1", m["TAIL_LAT"], m["TAIL_LON"])
@@ -150,4 +165,5 @@ def dashboard(sat_name):
     
     st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
-dashboard(asset)
+if sat_catalog:
+    dashboard(asset)
