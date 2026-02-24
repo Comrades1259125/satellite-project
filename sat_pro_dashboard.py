@@ -10,7 +10,7 @@ from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 from skyfield.api import load, wgs84
 
-# --- พารามิเตอร์ 40 รายการ ---
+# --- พารามิเตอร์ 40 รายการ (ห้ามยุ่ง) ---
 TELE_LABELS = [
     "BAT_VOLT", "BAT_TEMP", "SOL_PWR_A", "SOL_PWR_B", "BUS_CURR",
     "RW_X_RPM", "RW_Y_RPM", "RW_Z_RPM", "GYRO_STAB", "MAG_INTEN",
@@ -57,20 +57,47 @@ def run_calculation(sat_obj, target_dt=None):
         history["alts"].append(s.elevation.km)
     return data, history
 
+# ==========================================
+# 📊 NEW: HIGH-DETAIL GRAPH ENGINE
+# ==========================================
 class ULTIMATE_PDF(FPDF):
-    def draw_graph(self, x, y, w, h, title, data, color):
-        self.set_fill_color(245); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(0); self.rect(x, y, w, h)
-        self.set_font("Arial", 'B', 10); self.set_xy(x, y-5); self.cell(w, 5, title)
+    def draw_detailed_grid_graph(self, x, y, w, h, title, data, color, unit):
+        # พื้นหลังและกรอบ
+        self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
+        self.set_draw_color(200, 200, 200); self.set_line_width(0.1)
+        
+        # วาดเส้น Grid (แนวตั้ง 10 ช่อง, แนวนอน 5 ช่อง)
+        for i in range(11): # แนวตั้ง (Time steps)
+            lx = x + (i * (w / 10))
+            self.line(lx, y, lx, y + h)
+        for i in range(6): # แนวนอน (Value ranges)
+            ly = y + (i * (h / 5))
+            self.line(x, ly, x + w, ly)
+
+        # ข้อมูลแกน
+        min_v, max_v = min(data), max(data)
+        v_range = (max_v - min_v) if max_v != min_v else 1
+        
+        # วาดตัวเลขกำกับแกน Y (5 จุด)
+        self.set_font("Arial", '', 6); self.set_text_color(100)
+        for i in range(6):
+            val = max_v - (i * (v_range / 5))
+            self.set_xy(x - 12, y + (i * (h / 5)) - 1.5)
+            self.cell(10, 3, f"{val:.1f}", align='R')
+
+        # หัวข้อกราฟ
+        self.set_font("Arial", 'B', 9); self.set_text_color(0)
+        self.set_xy(x, y - 6); self.cell(w, 5, f"{title} ({unit})", align='L')
+
+        # วาดเส้นข้อมูล (High Precision)
         if len(data) > 1:
-            min_v, max_v = min(data), max(data); v_range = (max_v - min_v) if max_v != min_v else 1
             pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
-            self.set_draw_color(*color); self.set_line_width(0.6)
+            self.set_draw_color(*color); self.set_line_width(0.5)
             for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
 
 def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
     pdf = ULTIMATE_PDF()
-    # --- หน้าที่ 1: ข้อมูลที่อยู่และ Telemetry ---
+    # --- หน้าที่ 1 (ห้ามตัด) ---
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, "MISSION STRATEGIC DATA - PAGE 1", ln=True, align='C')
     pdf.set_font("Arial", 'B', 8); addr_txt = f"ZONE: {addr['z']} | COUNTRY: {addr['c']} | PROV: {addr['p']} | DIST: {addr['d']} | SUB: {addr['s']}"
@@ -82,21 +109,19 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
             if i+j < len(items): pdf.cell(47.5, 8, f"{items[i+j][0]}: {items[i+j][1]}", border=1)
         pdf.ln()
 
-    # --- หน้าที่ 2: กราฟ, QR Code และลายเซ็น ---
+    # --- หน้าที่ 2 (กราฟละเอียด) ---
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, "ANALYTICS & VERIFICATION - PAGE 2", ln=True, align='C')
+    pdf.set_font("Arial", 'B', 16); pdf.cell(0, 10, "PRECISION ANALYTICS - PAGE 2", ln=True, align='C')
     pdf.ln(10)
-    pdf.draw_graph(10, 30, 190, 50, "LATITUDE TRAJECTORY ANALYSIS", m_hist["lats"], (0, 102, 204))
-    pdf.draw_graph(10, 100, 190, 50, "ORBITAL VELOCITY (KM/H)", m_hist["vels"], (204, 0, 0))
-    pdf.draw_graph(10, 170, 190, 50, "ALTITUDE VARIATION (KM)", m_hist["alts"], (0, 153, 51))
+    pdf.draw_detailed_grid_graph(20, 40, 170, 45, "LATITUDE TRAJECTORY", m_hist["lats"], (0, 102, 204), "DEG")
+    pdf.draw_detailed_grid_graph(20, 105, 170, 45, "ORBITAL VELOCITY", m_hist["vels"], (204, 0, 0), "KM/H")
+    pdf.draw_detailed_grid_graph(20, 170, 170, 45, "ALTITUDE VARIATION", m_hist["alts"], (0, 153, 51), "KM")
     
-    # QR Code สั่งย้ายมาไว้หน้า 2 ท้ายกระดาษ
+    # QR & Sign (ห้ามเปลี่ยน)
     pdf.set_draw_color(0); pdf.rect(15, 235, 40, 45)
     qr = qrcode.make(f_id).convert('RGB'); q_buf = BytesIO(); qr.save(q_buf, format="PNG")
     pdf.image(q_buf, 17.5, 237, 35, 35)
     pdf.set_xy(15, 272); pdf.set_font("Arial", 'B', 7); pdf.cell(40, 5, "SECURE VERIFICATION", align='C', ln=True)
-    
-    # ลายเซ็นย้ายมาหน้า 2
     if s_img: pdf.image(BytesIO(s_img.getvalue()), 145, 235, 30, 20)
     pdf.line(120, 265, 190, 265); pdf.set_xy(120, 267); pdf.set_font("Arial", 'B', 10); 
     pdf.cell(70, 5, s_name.upper() if s_name else "DIRECTOR", align='C', ln=True)
@@ -106,8 +131,8 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
     for p in reader.pages: writer.add_page(p)
     writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
-# --- UI เหมือนเดิมห้ามเปลี่ยน ---
-st.set_page_config(page_title="ZENITH V8.6", layout="wide")
+# --- UI (ห้ามยุ่ง ห้ามตัด) ---
+st.set_page_config(page_title="ZENITH V8.7", layout="wide")
 if 'show_modal' not in st.session_state: st.session_state.show_modal = False
 if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 
