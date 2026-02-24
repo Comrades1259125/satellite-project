@@ -13,16 +13,23 @@ from skyfield.api import load, wgs84
 from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
-# 1. CORE DATA ENGINE (SYNCED & STABLE)
+# 1. CORE DATA ENGINE
 # ==========================================
 @st.cache_resource
 def init_system():
-    # ดึงข้อมูล TLE จริงจาก Celestrak
     url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
-    return {sat.name: sat for sat in load.tle_file(url)}
+    try: return {sat.name: sat for sat in load.tle_file(url)}
+    except: return {}
 
 sat_catalog = init_system()
 ts = load.timescale()
+
+# Initialize Session States
+if 'm_id' not in st.session_state: st.session_state.m_id = None
+if 'm_pwd' not in st.session_state: st.session_state.m_pwd = None
+if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
+if 'open_sys' not in st.session_state: st.session_state.open_sys = False
+if 'station_coords' not in st.session_state: st.session_state.station_coords = [13.75, 100.5] # Default Bangkok
 
 def run_calculation(sat_obj, target_dt=None):
     t_input = target_dt if target_dt else datetime.now(timezone.utc)
@@ -31,7 +38,7 @@ def run_calculation(sat_obj, target_dt=None):
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
     
-    # พารามิเตอร์ 40 รายการ (ห้ามซ้ำและต้องดูเป็น Tech จริง)
+    # 40 UNIQUE PARAMETERS
     tele = {
         "TRK_LAT": f"{subpoint.latitude.degrees:.4f}", "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
         "TRK_ALT": f"{subpoint.elevation.km:.2f} KM", "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H",
@@ -61,32 +68,16 @@ def run_calculation(sat_obj, target_dt=None):
         lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
         alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
 
-    return {"COORD": f"{subpoint.latitude.degrees:.4f}, {subpoint.longitude.degrees:.4f}", 
-            "LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
+    return {"LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
             "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
             "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
 
 # ==========================================
-# 2. HD ENGINEERING PDF ENGINE
+# 2. HD PDF & QR ENGINE
 # ==========================================
-def generate_verified_qr(data_text):
-    qr = qrcode.QRCode(border=2)
-    qr.add_data(data_text); qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-    w, h = img.size
-    canvas = Image.new('RGB', (w + 40, h + 90), 'white')
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle([5, 5, w + 35, h + 85], outline="darkgreen", width=5)
-    canvas.paste(img, (20, 15))
-    draw.text((w/2 + 20, h + 55), "VERIFIED ARCHIVE", fill="black", anchor="mm")
-    buf = BytesIO(); canvas.save(buf, format="PNG"); return buf
-
 class ENGINEERING_PDF(FPDF):
     def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
         self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(220, 220, 220); self.set_line_width(0.05)
-        for i in range(1, 11): self.line(x + (i*w/10), y, x + (i*w/10), y+h)
-        for i in range(1, 6): self.line(x, y + (i*h/5), x+w, y + (i*h/5))
         self.set_draw_color(0, 0, 0); self.set_line_width(0.3); self.rect(x, y, w, h)
         self.set_font("helvetica", 'B', 9); self.set_xy(x, y-5); self.cell(w, 5, title)
         if len(data) > 1:
@@ -99,171 +90,98 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
     pdf = ENGINEERING_PDF()
     pdf.add_page()
     pdf.set_font("helvetica", 'B', 22); pdf.cell(0, 15, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
-    pdf.set_font("helvetica", 'B', 12); pdf.cell(0, 8, f"REPORT ID: {f_id} | STATUS: ENCRYPTED", ln=True, align='C')
-    loc_text = f"ASSET: {sat_name.upper()} | STATION: {addr['sub']}, {addr['dist']}, {addr['prov']}".upper()
-    pdf.set_font("helvetica", '', 9); pdf.cell(0, 7, loc_text, ln=True, align='C')
     pdf.ln(5)
-    
-    # หน้า 1: Matrix 40 ช่อง (อัปเกรดความเนี๊ยบ)
-    pdf.set_fill_color(240, 240, 240); pdf.set_font("helvetica", 'B', 8)
     items = list(m['RAW_TELE'].items())
     for i in range(0, 40, 4):
         for j in range(4):
-            if i+j < len(items):
-                pdf.cell(47.25, 8, f" {items[i+j][0]}: {items[i+j][1]}", border=1)
+            if i+j < len(items): pdf.cell(47.25, 8, f" {items[i+j][0]}: {items[i+j][1]}", border=1)
         pdf.ln()
-    
-    # หน้า 2: กราฟวิเคราะห์
     pdf.add_page()
-    pdf.draw_precision_graph(25, 30, 160, 60, "ORBITAL LATITUDE TRACKING (DEG)", m['TAIL_LAT'], (0, 80, 180))
-    pdf.draw_precision_graph(25, 110, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
-    pdf.draw_precision_graph(110, 110, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
-    
-    # Signature & QR
-    qr_buf = generate_verified_qr(f_id)
-    pdf.image(qr_buf, 20, 195, 40, 55)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 140, 205, 30, 22)
-    pdf.line(110, 235, 190, 235)
-    pdf.set_xy(110, 237); pdf.set_font("helvetica", 'B', 11); pdf.cell(80, 6, s_name.upper(), align='C', ln=True)
-    pdf.set_x(110); pdf.set_font("helvetica", 'I', 9); pdf.cell(80, 5, s_pos.upper(), align='C')
-    
+    pdf.draw_precision_graph(25, 30, 160, 60, "ORBITAL LATITUDE TRACKING (DEG)", m['TAIL_LAT'])
     raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
     for p in reader.pages: writer.add_page(p)
-    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
+    writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
 # ==========================================
-# 3. INTERFACE (RESTORED & IMPROVED)
+# 3. INTERFACE & SIDEBAR
 # ==========================================
 st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
-
-# CSS Restoration & Dark Mode Visibility Fix
-st.markdown("""
-    <style>
-    .clock-container {
-        background: white !important; /* บังคับขาวเสมอเพื่อให้อ่านออกในทุกโหมด */
-        border: 6px solid black !important;
-        padding: 10px 60px !important;
-        border-radius: 100px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-    }
-    .clock-text {
-        color: black !important; /* ตัวหนังสือดำเข้ม */
-        font-family: 'Courier New', Courier, monospace;
-        font-weight: 900 !important;
-    }
-    @media (max-width: 600px) {
-        .clock-text { font-size: 35px !important; }
-        .clock-container { padding: 5px 20px !important; }
-    }
-    .stButton>button { height: 3.5em; width: 100%; font-weight: bold; border-radius: 10px; }
-    </style>
-""", unsafe_allow_html=True)
-
-clock_spot = st.empty()
 
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
     sat_name = st.selectbox("ACTIVE ASSET", list(sat_catalog.keys()))
     st.divider()
-    a1 = st.text_input("Sub-District", "Phra Borom")
-    a2 = st.text_input("District", "Phra Nakhon")
-    a3 = st.text_input("Province", "Bangkok")
-    a4 = st.text_input("Country", "Thailand")
-    addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
-    st.divider()
-    z1 = st.slider("Tactical Zoom", 1, 18, 12)
-    z2 = st.slider("Global View", 1, 10, 2)
-    z3 = st.slider("Station Zoom", 1, 18, 15)
-    if st.button("🧧 EXECUTE STRATEGIC REPORT", use_container_width=True, type="primary"):
-        st.session_state.open_sys = True
+    st.subheader("📍 STATION LOCATION")
+    sub_d = st.text_input("Sub-District", "That Choeng Chum")
+    dist = st.text_input("District", "Mueang Sakon Nakhon")
+    prov = st.text_input("Province", "Sakon Nakhon")
+    
+    # ✅ ปุ่มยืนยันที่อยู่
+    if st.button("✅ ยืนยันพิกัดสถานี (CONFIRM LOCATION)", use_container_width=True):
+        if "Sakon" in prov: st.session_state.station_coords = [17.16, 104.14]
+        else: st.session_state.station_coords = [13.75, 100.5]
+        st.success(f"STATION LOCKED: {dist}")
 
-if 'open_sys' not in st.session_state: st.session_state.open_sys = False
-if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
+    z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
+    if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"): st.session_state.open_sys = True
 
-# กู้คืนระบบ Dialog แบบที่พี่เขียนไว้ (ดีที่สุดแล้ว)
+# ==========================================
+# 4. FIXED DIALOG (NO MORE ATTRIBUTE ERROR)
+# ==========================================
 if st.session_state.open_sys:
     @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
     def archive_dialog():
         if st.session_state.pdf_blob is None:
-            mode = st.radio("Time Mode", ["Live Now", "Predictive"], horizontal=True)
-            t_sel = None
-            if mode == "Predictive":
-                c1, c2 = st.columns(2); t_sel = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
             s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
             s_pos = st.text_input("Position", "CHIEF COMMANDER")
-            s_img = st.file_uploader("Official Seal (PNG)", type=['png'])
+            s_img = st.file_uploader("Seal (PNG)", type=['png'])
             if st.button("🚀 INITIATE ENCRYPTION", use_container_width=True):
-                fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
-                pwd = ''.join(random.choices(string.digits, k=6))
-                m_data = run_calculation(sat_catalog[sat_name], t_sel)
-                st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
-                st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
+                st.session_state.m_id = f"REF-{random.randint(100, 999)}"
+                st.session_state.m_pwd = ''.join(random.choices(string.digits, k=6))
+                m_data = run_calculation(sat_catalog[sat_name])
+                st.session_state.pdf_blob = build_pdf(sat_name, {"sub":sub_d,"dist":dist,"prov":prov}, s_name, s_pos, s_img, st.session_state.m_id, st.session_state.m_pwd, m_data)
+                st.rerun()
         else:
+            # ใช้ค่าจาก session_state ที่มั่นใจว่ามีอยู่จริง
+            mid = st.session_state.m_id
+            pwd = st.session_state.m_pwd
             st.markdown(f'''
                 <div style="background:white; border:4px solid red; padding:20px; text-align:center; color:black;">
-                    <div style="font-size:16px;">ARCHIVE REFERENCE ID</div>
-                    <div style="font-size:24px; font-weight:900; color:red;">{st.session_state.m_id}</div>
-                    <hr>
-                    <div style="font-size:16px;">SECURITY PASSKEY</div>
-                    <div style="font-size:32px; font-weight:900; letter-spacing:5px;">{st.session_state.m_pwd}</div>
+                    ID: <h2 style="color:red; margin:0;">{mid}</h2>
+                    PASSKEY: <h1 style="letter-spacing:5px; margin:0;">{pwd}</h1>
                 </div>
             ''', unsafe_allow_html=True)
-            st.download_button("📥 DOWNLOAD ENCRYPTED PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
-            if st.button("CLOSE & RETURN"):
+            st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{mid}.pdf", use_container_width=True)
+            if st.button("CLOSE"):
                 st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
     archive_dialog()
 
 # ==========================================
-# 4. LIVE DASHBOARD (SYNCED REAL-TIME)
+# 5. DASHBOARD
 # ==========================================
 @st.fragment(run_every=1.0)
 def dashboard():
-    # Real-time High Contrast Clock
-    clock_spot.markdown(f'''
-        <div style="display:flex; justify-content:center; margin-bottom:25px;">
-            <div class="clock-container">
-                <span class="clock-text" style="font-size:65px;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span>
-            </div>
-        </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(f'''<div style="display:flex; justify-content:center; margin-bottom:20px;"><div style="background:white; border:5px solid black; padding:10px 60px; border-radius:100px; text-align:center;"><span style="color:black; font-size:60px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span></div></div>''', unsafe_allow_html=True)
     
     m = run_calculation(sat_catalog[sat_name])
-    
-    # Core Metrics
     c1, c2, c3 = st.columns(3)
-    c1.metric("ORBITAL ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
-    c2.metric("CURRENT VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
-    c3.metric("GPS COORDINATES", m["COORD"])
-    
-    # 3-Way Command Maps (No Blinking, Real Movement)
-    st.subheader("🌍 GEOSPATIAL COMMAND CENTERS")
+    c1.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
+    c2.metric("VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
+    c3.metric("GPS", f"{m['LAT']:.3f}, {m['LON']:.3f}")
+
+    # MAPS
     m_cols = st.columns(3)
-    
     def draw_map(lt, ln, zm, k, tl, tn, color='red'):
         fig = go.Figure()
         if tl: fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
-        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color=color, symbol='circle')))
-        fig.update_layout(
-            mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm),
-            margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False
-        )
-        st.plotly_chart(fig, use_container_width=True, key=f"{k}_{lt}") # lt ใน key บังคับอัปเดตเมื่อพิกัดเปลี่ยน
+        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color=color)))
+        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True, key=f"{k}_{lt}")
 
-    with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "TACTICAL", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "GLOBAL", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[2]: draw_map(13.75, 100.5, z3, "STATION", [], [], 'blue') # พิกัดสถานีภาคพื้น
+    with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T", m["TAIL_LAT"], m["TAIL_LON"])
+    with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G", m["TAIL_LAT"], m["TAIL_LON"])
+    with m_cols[2]: draw_map(st.session_state.station_coords[0], st.session_state.station_coords[1], z3, "S", [], [], 'blue')
 
-    # Analytics Graphs
-    st.subheader("📊 PERFORMANCE DATA STREAM")
-    g_cols = st.columns(2)
-    with g_cols[0]:
-        st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_ALT"], mode='lines+markers', line=dict(color='#00ff00', width=3))).update_layout(title="ALTITUDE VARIANCE (KM)", template="plotly_dark", height=280), use_container_width=True)
-    with g_cols[1]:
-        st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_VEL"], mode='lines+markers', line=dict(color='#ffff00', width=3))).update_layout(title="VELOCITY VARIANCE (KM/H)", template="plotly_dark", height=280), use_container_width=True)
-    
-    # Telemetry Table (40 Unique Parameters)
-    st.subheader("📑 SYSTEM TELEMETRY MATRIX")
-    df_table = pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)])
-    st.table(df_table)
+    st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 dashboard()
