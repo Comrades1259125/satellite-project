@@ -4,17 +4,27 @@ import pandas as pd
 import numpy as np
 import random
 import string
+import qrcode
+import base64
 from datetime import datetime, timedelta, timezone
 from fpdf import FPDF 
 from pypdf import PdfReader, PdfWriter
-import qrcode
 from io import BytesIO
 from skyfield.api import load, wgs84
-from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
-# 1. CORE DATA ENGINE
+# 1. CORE SYSTEM & STATE
 # ==========================================
+st.set_page_config(page_title="V5950 ANALYTICS 4-MAPS", layout="wide")
+
+if 'open_sys' not in st.session_state: st.session_state.open_sys = False
+if 'pdf_ready' not in st.session_state: st.session_state.pdf_ready = False
+if 'm_id' not in st.session_state: st.session_state.m_id = ""
+if 'm_pwd' not in st.session_state: st.session_state.m_pwd = ""
+if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
+if 'qr_base64' not in st.session_state: st.session_state.qr_base64 = ""
+if 'st_coords' not in st.session_state: st.session_state.st_coords = [17.16, 104.14]
+
 @st.cache_resource
 def init_system():
     url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
@@ -23,226 +33,144 @@ def init_system():
 sat_catalog = init_system()
 ts = load.timescale()
 
-def run_calculation(sat_obj, target_dt=None):
-    t_input = target_dt if target_dt else datetime.now(timezone.utc)
-    t = ts.from_datetime(t_input)
-    geocentric = sat_obj.at(t)
-    subpoint = wgs84.subpoint(geocentric)
-    v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
+def get_real_mission_data(sat_obj):
+    t_now = ts.now(); g = sat_obj.at(t_now); sub = wgs84.subpoint(g)
+    v = np.linalg.norm(g.velocity.km_per_s)
     
-    tele = {
-        "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
-        "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
-        "TRK_ALT": f"{subpoint.elevation.km:.2f} KM",
-        "TRK_VEL": f"{v_km_s * 3600:.2f} KM/H",
-        "EPS_BATT_V": f"{random.uniform(28.0, 32.0):.2f} V",
-        "EPS_SOLAR_A": f"{random.uniform(5.5, 8.2):.2f} A",
-        "EPS_TEMP": f"{random.uniform(22, 28):.2f} C",
-        "EPS_LOAD": f"{random.uniform(94, 98):.1f} %",
-        "ADC_GYRO_X": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_GYRO_Y": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_GYRO_Z": f"{random.uniform(-0.01, 0.01):.4f}",
-        "ADC_SUN_ANG": f"{random.uniform(0, 180):.2f} DEG",
-        "TCS_CORE_T": f"{random.uniform(18, 24):.2f} C",
-        "TCS_RAD_EFF": f"{random.uniform(0.88, 0.94):.2f}",
-        "TCS_HEATER": "NOMINAL",
-        "TCS_FLUX": f"{random.uniform(1350, 1370):.1f} W",
-        "OBC_CPU_LD": f"{random.randint(30, 50)} %",
-        "OBC_MEM_AV": f"{random.randint(1024, 2048)} MB",
-        "OBC_UPTIME": f"{random.randint(1000, 9000)} H",
-        "OBC_STATUS": "ACTIVE",
-        "COM_SIG_DB": f"{random.uniform(-105, -92):.2f} dBm",
-        "COM_SNR_VAL": f"{random.uniform(15, 20):.2f} dB",
-        "COM_BIT_RATE": "15.2 Mbps",
-        "COM_MODE": "ENCRYPTED",
-        "PLD_SENS_01": f"{random.uniform(10, 40):.2f}",
-        "PLD_SENS_02": f"{random.uniform(40, 70):.2f}",
-        "PLD_IMG_CAP": "READY",
-        "PLD_DATA_QL": "100%",
-        "SYS_FW_VER": "V5.9.5-ULT",
-        "SYS_LOCK": "AES-RSA",
-        "SYS_SYNC": "LOCKED",
-        "SYS_UPLINK": "ACTIVE",
-        "BUS_VOLT": f"{random.uniform(12, 13):.2f} V",
-        "BUS_CURR": f"{random.uniform(0.8, 1.2):.2f} A",
-        "ANT_POS": "DEPLOYED",
-        "RCS_FUEL": f"{random.uniform(75, 88):.1f} %",
-        "RCS_PRES": f"{random.uniform(280, 295):.1f} PSI",
-        "MISSION_PH": "PHASE-04",
-        "LOG_STATUS": "ARCHIVED",
-        "GEN_TIME": "REAL-TIME"
-    }
+    hist_lat, hist_lon, hist_alt = [], [], []
+    for i in range(0, 101, 5):
+        t_hist = ts.from_datetime(datetime.now(timezone.utc) - timedelta(minutes=i))
+        g_h = sat_obj.at(t_hist); sub_h = wgs84.subpoint(g_h)
+        hist_lat.append(sub_h.latitude.degrees)
+        hist_lon.append(sub_h.longitude.degrees)
+        hist_alt.append(sub_h.elevation.km)
 
-    lats, lons, alts, vels = [], [], [], []
-    for i in range(0, 101, 10):
-        pt = ts.from_datetime(t_input - timedelta(minutes=i))
-        g = sat_obj.at(pt); ps = wgs84.subpoint(g)
-        lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
-        alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
-
-    return {"COORD": f"{subpoint.latitude.degrees:.4f}, {subpoint.longitude.degrees:.4f}", 
-            "LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
-            "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
-            "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, "RAW_TELE": tele}
+    tele = {"LATITUDE": f"{sub.latitude.degrees:.5f}°", "LONGITUDE": f"{sub.longitude.degrees:.5f}°",
+            "ALTITUDE": f"{sub.elevation.km:.2f} KM", "VELOCITY": f"{v * 3600:.1f} KM/H"}
+    for i in range(1, 37): tele[f"DATA_CH_{i:02d}"] = f"{random.uniform(10,99):.2f}"
+    
+    return {"LAT": sub.latitude.degrees, "LON": sub.longitude.degrees, "ALT": sub.elevation.km,
+            "TELE": tele, "G_LAT": hist_lat, "G_LON": hist_lon, "G_ALT": hist_alt}
 
 # ==========================================
-# 2. HD PDF ENGINE
+# 2. PDF & QR ENGINE (คงเดิม)
 # ==========================================
-def generate_verified_qr(data_text):
-    qr = qrcode.QRCode(border=2)
-    qr.add_data(data_text); qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-    w, h = img.size
-    canvas = Image.new('RGB', (w + 40, h + 90), 'white')
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle([5, 5, w + 35, h + 85], outline="darkgreen", width=5)
-    canvas.paste(img, (20, 15))
-    draw.text((w/2 + 20, h + 55), "VERIFIED ARCHIVE", fill="black", anchor="mm")
-    buf = BytesIO(); canvas.save(buf, format="PNG"); return buf
+class MISSION_PDF(FPDF):
+    def draw_detailed_graph(self, x, y, w, h, data, title, color=(255,0,0)):
+        self.set_draw_color(0, 0, 0); self.set_fill_color(255, 255, 255); self.rect(x, y, w, h, 'FD')
+        self.set_font("Arial", 'B', 8); self.set_xy(x, y-5); self.cell(w, 5, title)
+        min_v, max_v = min(data), max(data)
+        v_range = max_v - min_v if max_v != min_v else 1
+        self.set_draw_color(220, 220, 220)
+        for i in range(6):
+            grid_y = y + h - (i * (h / 5)); self.line(x, grid_y, x + w, grid_y)
+        self.set_draw_color(*color); self.set_line_width(0.4)
+        pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h)) for i,v in enumerate(data)]
+        for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
+        self.set_line_width(0.2)
 
-class ENGINEERING_PDF(FPDF):
-    def draw_precision_graph(self, x, y, w, h, title, data, color=(0, 70, 180)):
-        self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(230, 230, 230); self.set_line_width(0.05)
-        for i in range(1, 41): self.line(x + (i*w/40), y, x + (i*w/40), y+h)
-        for i in range(1, 21): self.line(x, y + (i*h/20), x+w, y + (i*h/20))
-        self.set_draw_color(0, 0, 0); self.set_line_width(0.4); self.rect(x, y, w, h)
-        self.set_font("helvetica", 'B', 10); self.set_xy(x, y-5); self.cell(w, 5, title.upper())
-        if len(data) > 1:
-            min_v, max_v = min(data), max(data)
-            v_range = (max_v - min_v) if max_v != min_v else 1
-            pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
-            self.set_draw_color(*color); self.set_line_width(0.6)
-            for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
-            self.set_font("helvetica", '', 7); self.set_xy(x-15, y); self.cell(12, 3, f"{max_v:.1f}", align='R')
-            self.set_xy(x-15, y+h-3); self.cell(12, 3, f"{min_v:.1f}", align='R')
+def generate_qr_base64(text):
+    qr = qrcode.QRCode(box_size=10, border=2); qr.add_data(text); qr.make()
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = BytesIO(); img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode(), buf
 
-def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
-    pdf = ENGINEERING_PDF()
-    pdf.add_page()
-    pdf.ln(10)
-    pdf.set_font("helvetica", 'B', 24); pdf.cell(0, 12, "STRATEGIC MISSION ARCHIVE", ln=True, align='C')
-    pdf.set_font("helvetica", 'B', 14); pdf.cell(0, 10, f"ARCHIVE ID: {f_id}", ln=True, align='C')
-    loc = f"ASSET: {sat_name.upper()} | STATION: {addr['sub']}, {addr['dist']}, {addr['prov']}, {addr['cntr']}".upper()
-    pdf.set_font("helvetica", '', 10); pdf.cell(0, 8, loc, ln=True, align='C')
-    pdf.ln(5)
-    items = list(m['RAW_TELE'].items())
+def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m, qr_img_buf):
+    pdf = MISSION_PDF(); pdf.add_page()
+    pdf.set_font("Arial", 'B', 18); pdf.cell(0, 15, "OFFICIAL MISSION ARCHIVE", ln=True, align='C')
+    pdf.image(qr_img_buf, 170, 10, 25, 25); pdf.ln(5)
+    items = list(m['TELE'].items())
     for i in range(0, 40, 4):
         for j in range(4):
-            if i+j < len(items):
-                pdf.set_font("helvetica", '', 7); pdf.cell(47.25, 8, f" {items[i+j][0]}: {items[i+j][1]}", border=1)
+            if i+j < len(items): pdf.cell(47.5, 9, f"{items[i+j][0]}: {items[i+j][1]}", border=1)
         pdf.ln()
-    pdf.add_page()
-    pdf.draw_precision_graph(25, 30, 160, 65, "ORBITAL LATITUDE TRACKING (DEG)", m['TAIL_LAT'], (0, 80, 180))
-    pdf.draw_precision_graph(25, 115, 75, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (160, 100, 0))
-    pdf.draw_precision_graph(110, 115, 75, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
-    qr_buf = generate_verified_qr(f_id)
-    pdf.image(qr_buf, 20, 190, 45, 60)
-    pdf.line(105, 230, 195, 230)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 135, 205, 30, 22)
-    pdf.set_xy(105, 232); pdf.set_font("helvetica", 'B', 11); pdf.cell(90, 6, s_name.upper(), align='C', ln=True)
-    pdf.set_x(105); pdf.set_font("helvetica", 'I', 9); pdf.cell(90, 5, s_pos.upper(), align='C')
+    pdf.add_page() # หน้า 2 กราฟ 3 ชุด
+    pdf.draw_detailed_graph(25, 30, 160, 45, m['G_LAT'], "1. LATITUDE TRACKING", (200, 0, 0))
+    pdf.draw_detailed_graph(25, 95, 160, 45, m['G_LON'], "2. LONGITUDE TRACKING", (0, 150, 0))
+    pdf.draw_detailed_graph(25, 160, 160, 45, m['G_ALT'], "3. ALTITUDE STABILITY (KM)", (0, 0, 200))
     raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
-    writer.add_page(reader.pages[0]); writer.add_page(reader.pages[1])
-    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
+    for p in reader.pages: writer.add_page(p)
+    writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
 # ==========================================
-# 3. RESPONSIVE INTERFACE (iPad & Mobile)
+# 3. INTERFACE & SIDEBAR
 # ==========================================
-st.set_page_config(page_title="V5950 ANALYTICS", layout="wide")
-
-# CSS สำหรับ Mobile Responsive
-st.markdown("""
-    <style>
-    /* ปรับขนาดนาฬิกาให้เล็กลงในมือถือ */
-    @media (max-width: 600px) {
-        .clock-text { font-size: 35px !important; }
-        .clock-container { padding: 5px 20px !important; }
-    }
-    /* ปรับปุ่มให้ใหญ่ขึ้นสำหรับนิ้วสัมผัส */
-    .stButton>button {
-        height: 3em;
-        width: 100%;
-        font-weight: bold;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-clock_spot = st.empty()
-
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
-    sat_name = st.selectbox("ASSET", list(sat_catalog.keys()))
-    st.subheader("📍 STATION LOCATION")
-    a1 = st.text_input("Sub-District", "Phra Borom")
-    a2 = st.text_input("District", "Phra Nakhon")
-    a3 = st.text_input("Province", "Bangkok")
-    a4 = st.text_input("Country", "Thailand")
-    addr_data = {"sub": a1, "dist": a2, "prov": a3, "cntr": a4}
-    z1, z2, z3 = st.slider("Tactical", 1, 18, 12), st.slider("Global", 1, 10, 2), st.slider("Station", 1, 18, 15)
-    if st.button("🧧 EXECUTE REPORT", use_container_width=True, type="primary"): st.session_state.open_sys = True
+    sel_sat = st.selectbox("ASSET", list(sat_catalog.keys()))
+    st.divider()
+    a_sub = st.text_input("Sub-District", "That Choeng Chum")
+    a_dist = st.text_input("District", "Mueang Sakon Nakhon")
+    a_prov = st.text_input("Province", "Sakon Nakhon")
+    a_zip = st.text_input("Zip Code", "47000")
+    a_cntr = st.text_input("Country", "Thailand")
+    addr_data = {"prov": a_prov}
+    if st.button("✅ LOCK STATION"): st.session_state.st_coords = [17.16, 104.14] if "Sakon" in a_prov else [13.75, 100.5]
+    st.divider()
+    z1 = st.slider("Tactical Zoom", 1, 18, 12)
+    z2 = st.slider("Global Zoom", 1, 10, 2)
+    z3 = st.slider("Station Zoom", 1, 18, 15)
+    if st.button("🧧 GENERATE REPORT", type="primary", use_container_width=True):
+        st.session_state.pdf_ready = False; st.session_state.open_sys = True
 
-if 'open_sys' not in st.session_state: st.session_state.open_sys = False
-if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
-
-@st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
-def archive_dialog():
-    if st.session_state.pdf_blob is None:
-        mode = st.radio("Time Mode", ["Live", "Predictive"], horizontal=True)
-        t_sel = None
-        if mode == "Predictive":
-            c1, c2 = st.columns(2); t_sel = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
-        s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
-        s_pos = st.text_input("Position Sub-text", "CHIEF COMMANDER")
-        s_img = st.file_uploader("Seal (PNG)", type=['png'])
-        if st.button("🚀 INITIATE", use_container_width=True):
-            fid = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%Y%m%d')}"
-            pwd = ''.join(random.choices(string.digits, k=6))
-            m_data = run_calculation(sat_catalog[sat_name], t_sel)
-            st.session_state.pdf_blob = build_pdf(sat_name, addr_data, s_name, s_pos, s_img, fid, pwd, m_data)
-            st.session_state.m_id, st.session_state.m_pwd = fid, pwd; st.rerun()
-    else:
-        st.markdown(f'<div style="background:white; border:4px solid black; padding:20px; text-align:center;"><div style="font-size:18px;">ID: {st.session_state.m_id}</div><div style="font-size:24px; font-weight:900;">PASS: {st.session_state.m_pwd}</div></div>', unsafe_allow_html=True)
-        st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf")
-        if st.button("RETURN"): st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
-
-if st.session_state.open_sys: archive_dialog()
+# ==========================================
+# 4. DIALOG & LIVE DASHBOARD
+# ==========================================
+if st.session_state.open_sys:
+    @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
+    def archive_dialog():
+        if not st.session_state.pdf_ready:
+            s_name = st.text_input("Signer", "DIRECTOR TRIN")
+            if st.button("🚀 INITIATE SYSTEM", use_container_width=True):
+                st.session_state.m_id = f"REF-{random.randint(100, 999)}-{datetime.now().strftime('%m%d')}"
+                st.session_state.m_pwd = ''.join(random.choices(string.digits, k=6))
+                m_data = get_real_mission_data(sat_catalog[sel_sat])
+                st.session_state.qr_base64, qr_buf = generate_qr_base64(f"ID: {st.session_state.m_id}")
+                st.session_state.pdf_blob = build_pdf(sel_sat, addr_data, s_name, "", None, st.session_state.m_id, st.session_state.m_pwd, m_data, qr_buf)
+                st.session_state.pdf_ready = True; st.rerun()
+        else:
+            st.markdown(f'<div style="background:white; border:2px solid #333; padding:20px; text-align:center; color:black; border-radius:15px;"><div style="font-size:11px; font-weight:bold; color:#666;">REF ID</div><div style="font-size:28px; font-weight:900; color:#d9534f;">{st.session_state.m_id}</div><div style="display:flex; justify-content:center; margin:15px;"><div style="border:4px solid black; padding:5px;"><img src="data:image/png;base64,{st.session_state.qr_base64}" width="150"></div></div><hr><div style="font-size:48px; font-weight:900; letter-spacing:8px;">{st.session_state.m_pwd}</div></div>', unsafe_allow_html=True)
+            st.download_button("📥 DOWNLOAD", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf", use_container_width=True)
+    archive_dialog()
 
 @st.fragment(run_every=1.0)
 def dashboard():
-    # Responsive Clock
-    clock_spot.markdown(f'''<div style="display:flex; justify-content:center; margin-bottom:20px;"><div class="clock-container" style="background:white; border:5px solid black; padding:10px 60px; border-radius:100px; text-align:center;"><span class="clock-text" style="color:black; font-size:60px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</span></div></div>''', unsafe_allow_html=True)
-    m = run_calculation(sat_catalog[sat_name])
+    st.markdown(f'<div style="display:flex; justify-content:center;"><div style="background:white; border:4px solid black; padding:5px 80px; border-radius:100px; color:black; font-size:50px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")}</div></div>', unsafe_allow_html=True)
+    m = get_real_mission_data(sat_catalog[sel_sat])
     
-    # Metrics - บนมือถือจะเรียงเป็นแนวตั้งอัตโนมัติ
-    c1, c2, c3 = st.columns([1, 1, 1])
-    c1.metric("ALTITUDE", f"{m['ALT_VAL']:.2f} KM")
-    c2.metric("VELOCITY", f"{m['VEL_VAL']:.2f} KM/H")
-    c3.metric("COORD", m["COORD"])
+    # Grid 2x2 สำหรับ 4 แผนที่
+    r1 = st.columns(2)
+    r2 = st.columns(2)
     
-    # MAPS SECTION - ใช้ columns แบบรองรับ Mobile
-    st.subheader("🌍 GEOSPATIAL COMMAND")
-    m_cols = st.columns([1, 1, 1]) # บน iPad/PC จะเป็น 3 คอลัมน์ บนมือถือจะเป็นแนวตั้ง
-    
-    def draw_map(lt, ln, zm, k, tl, tn):
-        fig = go.Figure()
-        fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
-        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=14, color='red')))
-        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True, key=k)
-        
-    with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "T1", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "G1", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[2]: draw_map(13.75, 100.5, z3, "S1", [], [])
+    def draw_2d(lt, ln, zm, k, color='red', col=None):
+        fig = go.Figure(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=18, color=color)))
+        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=300)
+        col.plotly_chart(fig, use_container_width=True, key=k)
 
-    # GRAPHS SECTION
-    st.subheader("📊 PERFORMANCE ANALYTICS")
-    g_cols = st.columns([1, 1])
-    fig_opt = dict(template="plotly_dark", height=280, margin=dict(l=20, r=20, t=40, b=20))
-    with g_cols[0]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_ALT"], mode='lines+markers', line=dict(color='#00ff00'))).update_layout(title="ALTITUDE TRACK", **fig_opt), use_container_width=True)
-    with g_cols[1]: st.plotly_chart(go.Figure(go.Scatter(y=m["TAIL_VEL"], mode='lines+markers', line=dict(color='#ffff00'))).update_layout(title="VELOCITY TRACK", **fig_opt), use_container_width=True)
-    
-    # Table - เลื่อนดูในมือถือได้ (Horizontal scroll)
-    st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
+    draw_2d(m['LAT'], m['LON'], z1, "m1", 'red', r1[0])
+    draw_2d(m['LAT'], m['LON'], z2, "m2", 'orange', r1[1])
+    draw_2d(st.session_state.st_coords[0], st.session_state.st_coords[1], z3, "m3", 'blue', r2[0])
+
+    # แผนที่ 4: 3D Globe Visualization
+    with r2[1]:
+        # คำนวณพิกัด XYZ สำหรับทรงกลมโลก (Sphere)
+        phi = np.linspace(0, 2*np.pi, 30); theta = np.linspace(0, np.pi, 30)
+        xm = 6371 * np.outer(np.cos(phi), np.sin(theta))
+        ym = 6371 * np.outer(np.sin(phi), np.sin(theta))
+        zm = 6371 * np.outer(np.ones(np.size(phi)), np.cos(theta))
+        
+        fig3d = go.Figure()
+        fig3d.add_trace(go.Surface(x=xm, y=ym, z=zm, opacity=0.3, colorscale='Blues', showscale=False))
+        # พิกัดดาวเทียม XYZ (รวม Altitude)
+        rad = 6371 + m['ALT']
+        la_r, lo_r = np.radians(m['LAT']), np.radians(m['LON'])
+        sx = rad * np.cos(la_r) * np.cos(lo_r)
+        sy = rad * np.cos(la_r) * np.sin(lo_r)
+        sz = rad * np.sin(la_r)
+        fig3d.add_trace(go.Scatter3d(x=[sx], y=[sy], z=[sz], mode='markers+text', marker=dict(size=8, color='red'), text=["ASSET"]))
+        fig3d.update_layout(scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False), margin=dict(l=0,r=0,t=0,b=0), height=300)
+        st.plotly_chart(fig3d, use_container_width=True)
+
+    st.table(pd.DataFrame([list(m["TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
 
 dashboard()
