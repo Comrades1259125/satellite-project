@@ -3,188 +3,182 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import random
-import string
 import qrcode
+import time
 from datetime import datetime, timedelta, timezone
 from fpdf import FPDF 
 from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 from skyfield.api import load, wgs84
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # ==========================================
-# 1. ANALYTICS & PREDICTION ENGINE
+# 1. CORE ENGINE & TELEMETRY
 # ==========================================
 @st.cache_resource
-def system_initialize():
+def init_system():
     try:
         data = load.tle_file('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
         return {s.name: s for s in data}
-    except Exception as e:
-        st.error(f"Link Dropout: {e}")
+    except:
         return {}
 
-assets = system_initialize()
-timescale = load.timescale()
+assets = init_system()
+ts = load.timescale()
 
-def calculate_zenith_metrics(asset_obj, ref_time=None):
-    now = ref_time if ref_time else datetime.now(timezone.utc)
-    t = timescale.from_datetime(now)
-    pos = asset_obj.at(t)
-    sub = wgs84.subpoint(pos)
-    vel = np.linalg.norm(pos.velocity.km_per_s)
+def get_metrics(sat_obj):
+    now = datetime.now(timezone.utc)
+    t = ts.from_datetime(now)
+    geocentric = sat_obj.at(t)
+    sub = wgs84.subpoint(geocentric)
     
-    # 40 Unique Logic Sensors (No repetition)
-    telemetry_stream = {
-        "GEO_LAT": f"{sub.latitude.degrees:.4f}",
-        "GEO_LON": f"{sub.longitude.degrees:.4f}",
-        "GEO_ALT": f"{sub.elevation.km:.2f}",
-        "VEL_KPH": f"{vel * 3600:,.1f}",
-        "PWR_SOLAR": f"{random.uniform(400, 600):.2f} W",
-        "PWR_BATT": f"{random.uniform(92, 99):.1f} %",
-        "THERM_CORE": f"{random.uniform(18, 24):.2f} C",
-        "CPU_CYCLE": f"{random.randint(15, 30)} %",
-        "SIG_NOISE": f"{random.uniform(18, 25):.2f} dB",
-        "LINK_UP": "STABLE",
-        "ENC_MODE": "ENHANCED",
-        "FUEL_LVL": f"{random.uniform(60, 85):.1f} %"
+    telemetry = {
+        "LATITUDE": f"{sub.latitude.degrees:.4f}",
+        "LONGITUDE": f"{sub.longitude.degrees:.4f}",
+        "ALTITUDE": f"{sub.elevation.km:.2f} KM",
+        "VELOCITY": f"{np.linalg.norm(geocentric.velocity.km_per_s)*3600:,.1f} KM/H",
+        "BATT_LEVEL": f"{random.uniform(94, 98):.2f}%",
+        "CORE_TEMP": f"{random.uniform(22, 26):.2f}C",
+        "SIGNAL_SNR": f"{random.uniform(19, 23):.1f}dB",
+        "UPLINK_STAT": "ACTIVE"
     }
-    for i in range(28): telemetry_stream[f"AUX_{i+1:02d}"] = f"{random.uniform(5, 95):.2f}"
-
-    # PROJECTION Logic (Future Path 60 mins) - Replaces "Tail" logic
-    proj_lat, proj_lon = [], []
-    for m in range(0, 61, 5):
-        future_t = timescale.from_datetime(now + timedelta(minutes=m))
-        future_sub = wgs84.subpoint(asset_obj.at(future_t))
-        proj_lat.append(future_sub.latitude.degrees)
-        proj_lon.append(future_sub.longitude.degrees)
-
-    return {
-        "INFO": telemetry_stream,
-        "LAT": sub.latitude.degrees, "LON": sub.longitude.degrees,
-        "ALT": sub.elevation.km, "VEL": vel * 3600,
-        "PROJ_LAT": proj_lat, "PROJ_LON": proj_lon
-    }
+    # Fill remaining to 40 params
+    for i in range(32): telemetry[f"SENS_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
+    
+    return telemetry, sub.latitude.degrees, sub.longitude.degrees
 
 # ==========================================
-# 2. STRATEGIC ARCHIVE GENERATOR
+# 2. PDF ARCHIVE SYSTEM (STYLIZED)
 # ==========================================
-class STRATEGIC_PDF(FPDF):
-    def add_data_grid(self, data_dict):
-        self.set_font("Courier", 'B', 8)
-        x_start, y_start = 10, 50
-        count = 0
-        for k, v in data_dict.items():
-            col = count % 4
-            row = count // 4
-            self.set_xy(x_start + (col * 48), y_start + (row * 8))
-            self.cell(48, 8, f"{k}:{v}", border=1)
-            count += 1
-
-    def insert_visual(self, x, y, w, h, title, lats, lons):
-        self.rect(x, y, w, h)
-        self.set_font("Arial", 'B', 10)
-        self.text(x, y-2, title)
-        # Simplified vector path drawing
-        if lats:
-            self.set_draw_color(200, 0, 0)
-            for i in range(len(lats)-1):
-                self.line(x + (lons[i]+180)*(w/360), (y+h) - (lats[i]+90)*(h/180),
-                          x + (lons[i+1]+180)*(w/360), (y+h) - (lats[i+1]+90)*(h/180))
-
-def create_secure_archive(name, loc, s_name, s_pos, seal, fid, pin, metrics):
-    pdf = STRATEGIC_PDF()
+def create_pdf(fid, key, sat_name, metrics, addr_data):
+    pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 20); pdf.cell(0, 15, "ZENITH COMMAND ARCHIVE", ln=True, align='C')
-    pdf.set_font("Arial", 'I', 10); pdf.cell(0, 8, f"ASSET: {name} | NODE: {loc.upper()} | REF: {fid}", ln=True, align='C')
-    pdf.add_data_grid(metrics["INFO"])
+    # Header
+    pdf.set_font("Arial", 'B', 20)
+    pdf.cell(0, 15, "OFFICIAL DATA ARCHIVE", ln=True, align='C')
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, f"ARCHIVE ID: {fid}", ln=True, align='C')
     
-    pdf.add_page()
-    pdf.insert_visual(20, 30, 170, 80, "PROJECTED ORBITAL SWATH", metrics["PROJ_LAT"], metrics["PROJ_LON"])
-    
-    qr = qrcode.make(fid).convert('RGB')
-    q_buf = BytesIO(); qr.save(q_buf, format="PNG")
-    pdf.image(q_buf, 15, 220, 35, 35)
-    
-    if seal: pdf.image(BytesIO(seal.getvalue()), 150, 220, 30, 20)
-    pdf.set_xy(110, 245); pdf.set_font("Arial", 'B', 11); pdf.cell(80, 5, s_name.upper(), align='C', ln=True)
-    pdf.set_x(110); pdf.set_font("Arial", '', 9); pdf.cell(80, 5, s_pos.upper(), align='C')
+    # Address Grid (4 Columns)
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 10)
+    cols = list(addr_data.values())
+    for i in range(4):
+        pdf.cell(47.5, 10, cols[i].upper(), border=1, align='C')
+    pdf.ln(15)
 
-    raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
-    for p in reader.pages: writer.add_page(p)
-    writer.encrypt(pin); out = BytesIO(); writer.write(out); return out.getvalue()
+    # Data Table
+    pdf.set_font("Courier", '', 8)
+    items = list(metrics.items())
+    for i in range(0, 40, 4):
+        for j in range(4):
+            if i+j < len(items):
+                pdf.cell(47.5, 7, f"{items[i+j][0]}: {items[i+j][1]}", border=1)
+        pdf.ln()
+
+    # Encryption Key Footer
+    pdf.ln(20)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, f"ENCRYPTION KEY: {key}", ln=True, align='C')
+
+    # Security Encryption
+    raw = BytesIO(pdf.output())
+    writer = PdfWriter()
+    for page in PdfReader(raw).pages: writer.add_page(page)
+    writer.encrypt(key)
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 # ==========================================
-# 3. ZENITH COMMAND INTERFACE
+# 3. COMMAND INTERFACE
 # ==========================================
-st.set_page_config(page_title="ZENITH V7.0", layout="wide")
+st.set_page_config(page_title="STRATEGIC DASHBOARD", layout="wide")
 
-if 'archive' not in st.session_state: st.session_state.archive = None
-if 'trigger' not in st.session_state: st.session_state.trigger = False
-
+# Sidebar Configuration
 with st.sidebar:
-    st.title("🛰️ ZENITH COMMAND")
-    target = st.selectbox("ACTIVE ASSET", list(assets.keys()))
-    node = st.text_input("COMMAND NODE", "PACIFIC-ALPHA")
+    st.header("🛰️ SATELLITE CONTROL")
+    target = st.selectbox("SELECT ASSET", list(assets.keys()) if assets else ["No Data"])
+    
+    st.subheader("📍 DEPLOYMENT ADDRESS")
+    a1 = st.text_input("Region", "ASIA-PACIFIC")
+    a2 = st.text_input("Sector", "SEC-07")
+    a3 = st.text_input("Node", "BKK-MAIN")
+    a4 = st.text_input("Level", "LVL-04")
+    addr_map = {"R": a1, "S": a2, "N": a3, "L": a4}
+
     st.divider()
-    st.subheader("MULTIVARIATE ZOOM")
-    z_local = st.slider("Tactical View", 1, 18, 12)
-    z_global = st.slider("Orbital View", 1, 10, 2)
-    z_node = st.slider("Node View", 1, 18, 14)
-    if st.button("LOCK & ARCHIVE", use_container_width=True, type="primary"): st.session_state.trigger = True
+    st.subheader("🔍 MULTI-ZOOM")
+    z1 = st.slider("Tactical", 1, 18, 12)
+    z2 = st.slider("Global", 1, 10, 2)
+    z3 = st.slider("Station", 1, 18, 15)
 
-@st.dialog("🔐 SECURITY VERIFICATION")
-def auth_dialog():
-    if not st.session_state.archive:
-        u_name = st.text_input("Officer Name", "AGENT TRIN")
-        u_rank = st.text_input("Designation", "COMMANDER")
-        u_seal = st.file_uploader("Auth Seal (PNG)", type=['png'])
-        if st.button("ENCRYPT DATA"):
-            ref = f"ZNTH-{random.randint(1000,9999)}"
-            pin = "123456"
-            m = calculate_zenith_metrics(assets[target])
-            st.session_state.archive = create_secure_archive(target, node, u_name, u_rank, u_seal, ref, pin, m)
-            st.session_state.ref_id = ref; st.rerun()
-    else:
-        st.info(f"VERIFIED ID: {st.session_state.ref_id}")
-        st.download_button("DOWNLOAD ENCRYPTED ARCHIVE", st.session_state.archive, f"{st.session_state.ref_id}.pdf")
-        if st.button("DISCONNECT"): 
-            st.session_state.trigger = False; st.session_state.archive = None; st.rerun()
+    if st.button("GENERATE OFFICIAL ARCHIVE", use_container_width=True, type="primary"):
+        st.session_state.show_modal = True
 
-if st.session_state.trigger: auth_dialog()
-
+# Main Dashboard Fragment (Real-time Clock & Maps)
 @st.fragment(run_every=1.0)
-def live_dashboard():
-    # Dynamic Digital Clock
-    st.markdown(f'''<div style="background:#000; color:#0f0; padding:15px; border-radius:15px; text-align:center; border:2px solid #333; margin-bottom:20px;">
-                <span style="font-size:45px; font-family:monospace; font-weight:bold;">{datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC</span></div>''', unsafe_allow_html=True)
-    
-    m = calculate_zenith_metrics(assets[target])
-    
-    # Core Analytics Metrics
-    row1 = st.columns(3)
-    row1[0].metric("ZENITH ALTITUDE", f"{m['ALT']:,.2f} KM")
-    row1[1].metric("ORBITAL VELOCITY", f"{m['VEL']:,.1f} KM/H")
-    row1[2].metric("SUB-SATELLITE PT", f"{m['LAT']:.2f}, {m['LON']:.2f}")
+def main_view():
+    # Clock synchronized to Local Timezone
+    local_time = datetime.now().strftime("%H:%M:%S")
+    st.markdown(f"""
+        <div style="background:white; padding:20px; border-radius:100px; text-align:center; border:5px solid black; margin-bottom:20px;">
+            <h1 style="color:black; margin:0; font-family:monospace; font-size:60px;">{local_time}</h1>
+        </div>
+    """, unsafe_allow_html=True)
 
-    # Triple Map Logic
-    st.subheader("🌐 MULTI-VECTOR GEOSPATIAL ANALYSIS")
-    maps = st.columns(3)
-    
-    def generate_map(lt, ln, zm, tag, plat, plon):
-        fig = go.Figure()
-        # Drawing the Predicted Projection Path
-        fig.add_trace(go.Scattermapbox(lat=plat, lon=plon, mode='lines', line=dict(width=2, color='cyan')))
-        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red', symbol='rocket')))
-        fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=380, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True, key=tag)
+    if assets and target in assets:
+        m, lat, lon = get_metrics(assets[target])
+        
+        # Metrics Row
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ALTITUDE", m["ALTITUDE"])
+        c2.metric("VELOCITY", m["VELOCITY"])
+        c3.metric("COORD", f"{m['LATITUDE']}, {m['LONGITUDE']}")
 
-    with maps[0]: generate_map(m['LAT'], m['LON'], z_local, "TACT", m["PROJ_LAT"], m["PROJ_LON"])
-    with maps[1]: generate_map(m['LAT'], m['LON'], z_global, "GLOB", m["PROJ_LAT"], m["PROJ_LON"])
-    with maps[2]: generate_map(13.75, 100.5, z_node, "NODE", [], []) # Centered on Station
+        # Triple Map View
+        st.subheader("🌍 GEOSPATIAL COMMAND")
+        m_cols = st.columns(3)
+        
+        def draw_map(lt, ln, zm, key):
+            fig = go.Figure(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red')))
+            fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=350, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True, key=key)
 
-    # Telemetry Table
-    st.subheader("📋 TELEMETRY DATA GRID")
-    st.table(pd.DataFrame([list(m["INFO"].items())[i:i+4] for i in range(0, 40, 4)]))
+        with m_cols[0]: draw_map(lat, lon, z1, "m1")
+        with m_cols[1]: draw_map(lat, lon, z2, "m2")
+        with m_cols[2]: draw_map(13.75, 100.5, z3, "m3") # Station Map
 
-if assets: live_dashboard()
+        # 40 Params Table
+        st.subheader("📊 SYSTEM TELEMETRY (40-STREAM)")
+        df = pd.DataFrame([list(m.items())[i:i+4] for i in range(0, 40, 4)])
+        st.table(df)
+
+# Archive Modal (Matches your Screenshot)
+if st.session_state.get("show_modal"):
+    @st.dialog("📋 OFFICIAL ARCHIVE ACCESS")
+    def show_archive():
+        # Matching your screenshot ID and Key
+        fid = f"REF-{random.randint(100,999)}-{datetime.now().strftime('%m%d')}"
+        key = "".join([str(random.randint(0,9)) for _ in range(6)])
+        
+        st.markdown(f"""
+            <div style="text-align:center; background:white; padding:30px; border-radius:10px; border:1px solid #ddd;">
+                <p style="color:grey; font-weight:bold;">DOCUMENT ARCHIVE ID</p>
+                <h2 style="color:red; font-weight:900; letter-spacing:2px;">{fid}</h2>
+                <hr>
+                <p style="color:grey; font-weight:bold;">ENCRYPTION KEY</p>
+                <h1 style="color:black; font-weight:900; letter-spacing:10px;">{key}</h1>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        m_data, _, _ = get_metrics(assets[target])
+        pdf_data = create_pdf(fid, key, target, m_data, addr_map)
+        
+        st.download_button("📥 DOWNLOAD ENCRYPTED ARCHIVE", pdf_data, f"{fid}.pdf", use_container_width=True)
+        if st.button("RETURN TO COMMAND", use_container_width=True):
+            st.session_state.show_modal = False
+            st.rerun()
+    show_archive()
+
+main_view()
