@@ -105,9 +105,49 @@ def build_pdf(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_main, m_hist):
     for p in reader.pages: writer.add_page(p)
     writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
-st.set_page_config(page_title="ZENITH V8.8", layout="wide")
+st.set_page_config(page_title="ZENITH V8.9", layout="wide")
 
-# --- UI CONTROLS ---
+# ล็อกสถานะป๊อปอัพให้คงที่
+if "modal_active" not in st.session_state: st.session_state.modal_active = False
+if "archive_data" not in st.session_state: st.session_state.archive_data = None
+
+@st.dialog("📋 MISSION DATA ARCHIVE")
+def mission_modal():
+    if st.session_state.archive_data is None:
+        mode = st.radio("Analytics", ["Live Stream", "Predictive Orbit"], horizontal=True)
+        t_target = None
+        if mode == "Predictive Orbit":
+            c1, c2 = st.columns(2); t_target = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
+        s_name, s_pos = st.text_input("Officer Name"), st.text_input("Designation")
+        s_img = st.file_uploader("Seal (PNG)", type=['png'])
+        if st.button("🚀 EXECUTE ENCRYPTION"):
+            fid = f"REF-{random.randint(100,999)}-{datetime.now().strftime('%m%d')}"
+            pwd = "".join([str(random.randint(0,9)) for _ in range(6)])
+            m_main, m_hist = run_calculation(sat_catalog[st.session_state.active_sat], t_target)
+            addr = st.session_state.active_addr
+            pdf_blob = build_pdf(st.session_state.active_sat, addr, s_name, s_pos, s_img, fid, pwd, m_main, m_hist)
+            # เก็บข้อมูลเข้า Session ถาวร ป้องกันการหายเมื่อกดโหลด
+            st.session_state.archive_data = {"pdf": pdf_blob, "fid": fid, "pwd": pwd}
+            st.rerun()
+    else:
+        # ส่วนแสดงผลรหัสและปุ่มดาวน์โหลด (จะไม่หายไปไหนจนกว่าจะกด CLOSE)
+        data = st.session_state.archive_data
+        st.markdown(f'''
+            <div style="border:4px solid black; padding:25px; border-radius:15px; text-align:center; background:white; color:black;">
+                <p style="color:gray; font-weight:bold;">DOCUMENT ARCHIVE ID</p>
+                <h2 style="color:red; font-weight:900; font-size:32px;">{data["fid"]}</h2>
+                <hr>
+                <p style="color:gray; font-weight:bold;">ENCRYPTION PASSKEY</p>
+                <h1 style="color:black; font-weight:900; font-size:55px; letter-spacing:15px;">{data["pwd"]}</h1>
+            </div>
+        ''', unsafe_allow_html=True)
+        st.write("")
+        st.download_button("📥 DOWNLOAD ENCRYPTED PDF", data["pdf"], f"{data['fid']}.pdf", use_container_width=True)
+        if st.button("CLOSE & RETURN", use_container_width=True): 
+            st.session_state.archive_data = None
+            st.session_state.modal_active = False
+            st.rerun()
+
 with st.sidebar:
     st.header("🛰️ MISSION CONTROL")
     sel_sat = st.selectbox("ACTIVE ASSET", list(sat_catalog.keys()))
@@ -118,36 +158,13 @@ with st.sidebar:
     st.divider()
     z1 = st.slider("Tactical", 1, 18, 12, key="z1"); z2 = st.slider("Global", 1, 10, 2, key="z2"); z3 = st.slider("Station", 1, 18, 15, key="z3")
 
-    # FIX: เรียก Dialog ตรงๆ จากปุ่มเท่านั้น ห้ามเก็บค่าลง session state แบบถาวร
-    @st.dialog("📋 MISSION DATA ARCHIVE")
-    def mission_modal():
-        if "pdf_ready" not in st.session_state: st.session_state.pdf_ready = False
-        
-        if not st.session_state.pdf_ready:
-            mode = st.radio("Analytics", ["Live Stream", "Predictive Orbit"], horizontal=True)
-            t_target = None
-            if mode == "Predictive Orbit":
-                c1, c2 = st.columns(2); t_target = datetime.combine(c1.date_input("Date"), c2.time_input("Time")).replace(tzinfo=timezone.utc)
-            s_name, s_pos = st.text_input("Officer Name"), st.text_input("Designation")
-            s_img = st.file_uploader("Seal (PNG)", type=['png'])
-            if st.button("🚀 EXECUTE ENCRYPTION"):
-                fid = f"REF-{random.randint(100,999)}-{datetime.now().strftime('%m%d')}"
-                pwd = "".join([str(random.randint(0,9)) for _ in range(6)])
-                m_main, m_hist = run_calculation(sat_catalog[sel_sat], t_target)
-                addr = {"z": z_a, "c": c_a, "p": p_a, "d": d_a, "s": s_a}
-                st.session_state.temp_pdf = build_pdf(sel_sat, addr, s_name, s_pos, s_img, fid, pwd, m_main, m_hist)
-                st.session_state.temp_fid, st.session_state.temp_pwd = fid, pwd
-                st.session_state.pdf_ready = True
-                st.rerun()
-        else:
-            st.markdown(f'<div style="border:4px solid black; padding:20px; text-align:center;">ID: <h2 style="color:red;">{st.session_state.temp_fid}</h2>PASS: <h1 style="letter-spacing:10px;">{st.session_state.temp_pwd}</h1></div>', unsafe_allow_html=True)
-            st.download_button("📥 DOWNLOAD PDF", st.session_state.temp_pdf, f"{st.session_state.temp_fid}.pdf", use_container_width=True)
-            if st.button("CLOSE"): 
-                del st.session_state.pdf_ready
-                st.rerun()
-
     if st.button("🧧 GENERATE MISSION ARCHIVE", use_container_width=True, type="primary"):
-        mission_modal()
+        st.session_state.active_sat = sel_sat
+        st.session_state.active_addr = {"z": z_a, "c": c_a, "p": p_a, "d": d_a, "s": s_a}
+        st.session_state.modal_active = True
+
+if st.session_state.modal_active:
+    mission_modal()
 
 @st.fragment(run_every=1.0)
 def main_dashboard():
