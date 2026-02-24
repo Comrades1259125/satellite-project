@@ -10,9 +10,7 @@ from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 from skyfield.api import load, wgs84
 
-# ==========================================
-# 1. CORE ENGINE & GEOLOCATION
-# ==========================================
+# --- ส่วนนี้ห้ามแก้ (Core Engine) ---
 @st.cache_resource
 def init_system():
     try:
@@ -36,10 +34,8 @@ def run_calculation(sat_obj, target_dt=None):
     geocentric = sat_obj.at(t)
     subpoint = wgs84.subpoint(geocentric)
     v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
-    
     tele = {"TRK_LAT": subpoint.latitude.degrees, "TRK_LON": subpoint.longitude.degrees,
             "TRK_ALT": subpoint.elevation.km, "TRK_VEL": v_km_s * 3600}
-    
     history = {"lats": [], "lons": [], "vels": [], "alts": []}
     for i in range(0, 101, 5):
         pt = ts.from_datetime(t_input - timedelta(minutes=i))
@@ -49,9 +45,7 @@ def run_calculation(sat_obj, target_dt=None):
         history["alts"].append(s.elevation.km)
     return tele, history
 
-# ==========================================
-# 2. PDF ENGINE (HIGH-DETAIL)
-# ==========================================
+# --- ส่วนนี้ห้ามแก้ (PDF Engine) ---
 class ULTIMATE_PDF(FPDF):
     def draw_detailed_graph(self, x, y, w, h, title, data, color):
         self.set_fill_color(245, 245, 245); self.rect(x, y, w, h, 'F')
@@ -92,13 +86,15 @@ def build_ultimate_archive(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m_ma
     writer.encrypt(pwd); out = BytesIO(); writer.write(out); return out.getvalue()
 
 # ==========================================
-# 3. INTERFACE (BUG-FREE POPUP)
+# 3. INTERFACE (แก้ไขจุดที่เด้งเอง)
 # ==========================================
-st.set_page_config(page_title="ZENITH V8.1", layout="wide")
+st.set_page_config(page_title="ZENITH V8.2", layout="wide")
 
-# แก้ไขปัญหาป๊อปอัพเด้ง: ใช้ State ควบคุม 100%
-if 'show_modal' not in st.session_state: st.session_state.show_modal = False
-if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
+# FIX: บังคับให้หน้าดาวน์โหลดปิดเสมอเมื่อเริ่ม App (ป้องกันการเด้งเองตอนเข้าเว็บ)
+if 'show_modal' not in st.session_state: 
+    st.session_state.show_modal = False
+if 'pdf_blob' not in st.session_state: 
+    st.session_state.pdf_blob = None
 
 with st.sidebar:
     st.header("🛰️ COMMAND PANEL")
@@ -115,16 +111,15 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🔍 MULTI-ZOOM")
-    # เพิ่ม key ให้กับ slider เพื่อแยกประเภทข้อมูลออกจาก state อื่นๆ
     z1 = st.slider("Tactical", 1, 18, 12, key="zoom_1")
     z2 = st.slider("Global", 1, 10, 2, key="zoom_2")
     z3 = st.slider("Station", 1, 18, 15, key="zoom_3")
     
-    # ปุ่มนี้จะเปลี่ยน state เพื่อเปิด popup เท่านั้น
+    # TRIGGER: ป๊อปอัพจะเปิดเมื่อกดปุ่มนี้เท่านั้น
     if st.button("🧧 EXECUTE SECURE ARCHIVE", use_container_width=True, type="primary"):
         st.session_state.show_modal = True
 
-# Popup จะทำงานเมื่อ st.session_state.show_modal เป็น True เท่านั้น
+# MODAL ฟังก์ชัน (เรียกใช้เฉพาะเมื่อถูก Trigger)
 @st.dialog("📋 ARCHIVE FINALIZATION")
 def modal():
     if st.session_state.pdf_blob is None:
@@ -160,8 +155,11 @@ def modal():
         st.write("")
         st.download_button("📥 DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.fid}.pdf", use_container_width=True)
         if st.button("RETURN TO DASHBOARD", use_container_width=True):
-            st.session_state.show_modal = False; st.session_state.pdf_blob = None; st.rerun()
+            st.session_state.show_modal = False
+            st.session_state.pdf_blob = None
+            st.rerun()
 
+# แก้ไขจุดที่ทำให้เด้งเอง: ใส่เงื่อนไขครอบคลุมการเรียกใช้ Dialog
 if st.session_state.show_modal:
     modal()
 
