@@ -13,187 +13,178 @@ from skyfield.api import load, wgs84
 from PIL import Image, ImageDraw
 
 # ==========================================
-# 1. CORE DATA ENGINE (RESTORED & OPTIMIZED)
+# 1. ANALYTICS & PREDICTION ENGINE
 # ==========================================
 @st.cache_resource
-def init_satellite_system():
+def system_initialize():
     try:
-        url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
-        satellites = load.tle_file(url)
-        return {sat.name: sat for sat in satellites}
+        data = load.tle_file('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
+        return {s.name: s for s in data}
     except Exception as e:
-        st.error(f"System Link Failure: {e}")
+        st.error(f"Link Dropout: {e}")
         return {}
 
-sat_catalog = init_satellite_system()
-ts = load.timescale()
+assets = system_initialize()
+timescale = load.timescale()
 
-def run_orbital_mechanics(sat_obj, target_dt=None):
-    t_input = target_dt if target_dt else datetime.now(timezone.utc)
-    t = ts.from_datetime(t_input)
-    geocentric = sat_obj.at(t)
-    subpoint = wgs84.subpoint(geocentric)
-    v_km_s = np.linalg.norm(geocentric.velocity.km_per_s)
+def calculate_zenith_metrics(asset_obj, ref_time=None):
+    now = ref_time if ref_time else datetime.now(timezone.utc)
+    t = timescale.from_datetime(now)
+    pos = asset_obj.at(t)
+    sub = wgs84.subpoint(pos)
+    vel = np.linalg.norm(pos.velocity.km_per_s)
     
-    # Restored 40-Parameter Telemetry
-    tele = {
-        "TRK_LAT": f"{subpoint.latitude.degrees:.4f}",
-        "TRK_LON": f"{subpoint.longitude.degrees:.4f}",
-        "TRK_ALT": f"{subpoint.elevation.km:.2f} KM",
-        "TRK_VEL": f"{v_km_s * 3600:,.2f} KM/H",
-        "EPS_STAT": "NOMINAL",
-        "EPS_V_BUS": f"{random.uniform(28.0, 32.0):.2f} V",
-        "TCS_TEMP": f"{random.uniform(22, 28):.2f} C",
-        "OBC_LOAD": f"{random.randint(20, 45)} %",
-        "COM_SIGNAL": f"{random.uniform(-105, -90):.2f} dBm",
-        "MISSION_PH": "PHASE-04",
-        "SYS_LOCK": "AES-256",
-        "ANT_POS": "DEPLOYED"
+    # 40 Unique Logic Sensors (No repetition)
+    telemetry_stream = {
+        "GEO_LAT": f"{sub.latitude.degrees:.4f}",
+        "GEO_LON": f"{sub.longitude.degrees:.4f}",
+        "GEO_ALT": f"{sub.elevation.km:.2f}",
+        "VEL_KPH": f"{vel * 3600:,.1f}",
+        "PWR_SOLAR": f"{random.uniform(400, 600):.2f} W",
+        "PWR_BATT": f"{random.uniform(92, 99):.1f} %",
+        "THERM_CORE": f"{random.uniform(18, 24):.2f} C",
+        "CPU_CYCLE": f"{random.randint(15, 30)} %",
+        "SIG_NOISE": f"{random.uniform(18, 25):.2f} dB",
+        "LINK_UP": "STABLE",
+        "ENC_MODE": "ENHANCED",
+        "FUEL_LVL": f"{random.uniform(60, 85):.1f} %"
     }
-    for i in range(28):
-        tele[f"SENSOR_{i+1:02d}"] = f"{random.uniform(10, 99):.2f}"
+    for i in range(28): telemetry_stream[f"AUX_{i+1:02d}"] = f"{random.uniform(5, 95):.2f}"
 
-    # Trajectory Calculation (Past 100 mins)
-    lats, lons, alts, vels = [], [], [], []
-    for i in range(0, 101, 10):
-        pt = ts.from_datetime(t_input - timedelta(minutes=i))
-        g = sat_obj.at(pt); ps = wgs84.subpoint(g)
-        lats.append(ps.latitude.degrees); lons.append(ps.longitude.degrees)
-        alts.append(ps.elevation.km); vels.append(np.linalg.norm(g.velocity.km_per_s) * 3600)
+    # PROJECTION Logic (Future Path 60 mins) - Replaces "Tail" logic
+    proj_lat, proj_lon = [], []
+    for m in range(0, 61, 5):
+        future_t = timescale.from_datetime(now + timedelta(minutes=m))
+        future_sub = wgs84.subpoint(asset_obj.at(future_t))
+        proj_lat.append(future_sub.latitude.degrees)
+        proj_lon.append(future_sub.longitude.degrees)
 
     return {
-        "COORD": f"{subpoint.latitude.degrees:.4f}, {subpoint.longitude.degrees:.4f}",
-        "LAT": subpoint.latitude.degrees, "LON": subpoint.longitude.degrees,
-        "ALT_VAL": subpoint.elevation.km, "VEL_VAL": v_km_s * 3600,
-        "TAIL_LAT": lats, "TAIL_LON": lons, "TAIL_ALT": alts, "TAIL_VEL": vels, 
-        "RAW_TELE": tele
+        "INFO": telemetry_stream,
+        "LAT": sub.latitude.degrees, "LON": sub.longitude.degrees,
+        "ALT": sub.elevation.km, "VEL": vel * 3600,
+        "PROJ_LAT": proj_lat, "PROJ_LON": proj_lon
     }
 
 # ==========================================
-# 2. HD PDF & QR ARCHIVE (RESTORED)
+# 2. STRATEGIC ARCHIVE GENERATOR
 # ==========================================
-def generate_secure_qr(data):
-    qr = qrcode.QRCode(box_size=10, border=2)
-    qr.add_data(data); qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-    buf = BytesIO(); img.save(buf, format="PNG"); return buf
+class STRATEGIC_PDF(FPDF):
+    def add_data_grid(self, data_dict):
+        self.set_font("Courier", 'B', 8)
+        x_start, y_start = 10, 50
+        count = 0
+        for k, v in data_dict.items():
+            col = count % 4
+            row = count // 4
+            self.set_xy(x_start + (col * 48), y_start + (row * 8))
+            self.cell(48, 8, f"{k}:{v}", border=1)
+            count += 1
 
-class ENGINEERING_PDF(FPDF):
-    def draw_graph(self, x, y, w, h, title, data, color):
-        self.set_fill_color(252, 252, 252); self.rect(x, y, w, h, 'F')
-        self.set_draw_color(0, 0, 0); self.set_line_width(0.5); self.rect(x, y, w, h)
-        self.set_font("Helvetica", 'B', 10); self.set_xy(x, y-5); self.cell(w, 5, title)
-        if len(data) > 1:
-            min_v, max_v = min(data), max(data)
-            v_range = (max_v - min_v) if max_v != min_v else 1
-            pts = [(x + (i*(w/(len(data)-1))), (y+h) - ((v-min_v)/v_range*h*0.8) - (h*0.1)) for i,v in enumerate(data)]
-            self.set_draw_color(*color); self.set_line_width(0.6)
-            for i in range(len(pts)-1): self.line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1])
+    def insert_visual(self, x, y, w, h, title, lats, lons):
+        self.rect(x, y, w, h)
+        self.set_font("Arial", 'B', 10)
+        self.text(x, y-2, title)
+        # Simplified vector path drawing
+        if lats:
+            self.set_draw_color(200, 0, 0)
+            for i in range(len(lats)-1):
+                self.line(x + (lons[i]+180)*(w/360), (y+h) - (lats[i]+90)*(h/180),
+                          x + (lons[i+1]+180)*(w/360), (y+h) - (lats[i+1]+90)*(h/180))
 
-def build_archive(sat_name, addr, s_name, s_pos, s_img, f_id, pwd, m):
-    pdf = ENGINEERING_PDF()
+def create_secure_archive(name, loc, s_name, s_pos, seal, fid, pin, metrics):
+    pdf = STRATEGIC_PDF()
     pdf.add_page()
-    pdf.set_font("Helvetica", 'B', 24); pdf.cell(0, 15, "MISSION ARCHIVE REPORT", ln=True, align='C')
-    pdf.set_font("Helvetica", 'B', 12); pdf.cell(0, 10, f"REF ID: {f_id}", ln=True, align='C')
-    pdf.set_font("Helvetica", '', 9); pdf.cell(0, 5, f"STATION: {addr.upper()}", ln=True, align='C')
-    pdf.ln(10)
+    pdf.set_font("Arial", 'B', 20); pdf.cell(0, 15, "ZENITH COMMAND ARCHIVE", ln=True, align='C')
+    pdf.set_font("Arial", 'I', 10); pdf.cell(0, 8, f"ASSET: {name} | NODE: {loc.upper()} | REF: {fid}", ln=True, align='C')
+    pdf.add_data_grid(metrics["INFO"])
     
-    items = list(m['RAW_TELE'].items())
-    for i in range(0, 40, 4):
-        for j in range(4):
-            if i+j < len(items):
-                pdf.set_font("Helvetica", '', 7)
-                pdf.cell(47.25, 8, f" {items[i+j][0]}: {items[i+j][1]}", border=1)
-        pdf.ln()
-
     pdf.add_page()
-    pdf.draw_graph(20, 30, 170, 70, "ORBITAL TRAJECTORY (LAT)", m['TAIL_LAT'], (0, 80, 180))
-    pdf.draw_graph(20, 115, 80, 50, "VELOCITY (KM/H)", m['TAIL_VEL'], (180, 100, 0))
-    pdf.draw_graph(110, 115, 80, 50, "ALTITUDE (KM)", m['TAIL_ALT'], (0, 120, 60))
+    pdf.insert_visual(20, 30, 170, 80, "PROJECTED ORBITAL SWATH", metrics["PROJ_LAT"], metrics["PROJ_LON"])
     
-    qr_buf = generate_secure_qr(f_id)
-    pdf.image(qr_buf, 20, 190, 40, 40)
-    if s_img: pdf.image(BytesIO(s_img.getvalue()), 145, 200, 30, 22)
-    pdf.set_xy(110, 225); pdf.set_font("Helvetica", 'B', 12); pdf.cell(80, 6, s_name.upper(), align='C', ln=True)
-    pdf.set_x(110); pdf.set_font("Helvetica", 'I', 10); pdf.cell(80, 5, s_pos.upper(), align='C')
+    qr = qrcode.make(fid).convert('RGB')
+    q_buf = BytesIO(); qr.save(q_buf, format="PNG")
+    pdf.image(q_buf, 15, 220, 35, 35)
+    
+    if seal: pdf.image(BytesIO(seal.getvalue()), 150, 220, 30, 20)
+    pdf.set_xy(110, 245); pdf.set_font("Arial", 'B', 11); pdf.cell(80, 5, s_name.upper(), align='C', ln=True)
+    pdf.set_x(110); pdf.set_font("Arial", '', 9); pdf.cell(80, 5, s_pos.upper(), align='C')
 
-    raw_out = BytesIO(pdf.output()); reader = PdfReader(raw_out); writer = PdfWriter()
-    for page in reader.pages: writer.add_page(page)
-    writer.encrypt(pwd); final = BytesIO(); writer.write(final); return final.getvalue()
+    raw = BytesIO(pdf.output()); reader = PdfReader(raw); writer = PdfWriter()
+    for p in reader.pages: writer.add_page(p)
+    writer.encrypt(pin); out = BytesIO(); writer.write(out); return out.getvalue()
 
 # ==========================================
-# 3. INTERFACE (RESTORED TRIPLE ZOOM)
+# 3. ZENITH COMMAND INTERFACE
 # ==========================================
-st.set_page_config(page_title="V6.0 ULTIMATE", layout="wide")
+st.set_page_config(page_title="ZENITH V7.0", layout="wide")
 
-if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
-if 'open_sys' not in st.session_state: st.session_state.open_sys = False
+if 'archive' not in st.session_state: st.session_state.archive = None
+if 'trigger' not in st.session_state: st.session_state.trigger = False
 
 with st.sidebar:
-    st.header("🛰️ MISSION CONTROL")
-    if sat_catalog:
-        sel_sat = st.selectbox("SELECT ASSET", list(sat_catalog.keys()))
-        sat_obj = sat_catalog[sel_sat]
-    
-    st.subheader("📍 STATION CONFIG")
-    st_name = st.text_input("Station Name", "BANGKOK-01")
-    
+    st.title("🛰️ ZENITH COMMAND")
+    target = st.selectbox("ACTIVE ASSET", list(assets.keys()))
+    node = st.text_input("COMMAND NODE", "PACIFIC-ALPHA")
     st.divider()
-    st.subheader("🔍 TRIPLE ZOOM CONTROL")
-    z1 = st.slider("Tactical (Local)", 1, 18, 12)
-    z2 = st.slider("Global (Orbit)", 1, 10, 2)
-    z3 = st.slider("Station (Ground)", 1, 18, 15)
-    
-    if st.button("EXECUTE ARCHIVE", use_container_width=True, type="primary"):
-        st.session_state.open_sys = True
+    st.subheader("MULTIVARIATE ZOOM")
+    z_local = st.slider("Tactical View", 1, 18, 12)
+    z_global = st.slider("Orbital View", 1, 10, 2)
+    z_node = st.slider("Node View", 1, 18, 14)
+    if st.button("LOCK & ARCHIVE", use_container_width=True, type="primary"): st.session_state.trigger = True
 
-@st.dialog("📋 ARCHIVE FINALIZATION")
-def archive_dialog():
-    if st.session_state.pdf_blob is None:
-        s_name = st.text_input("Signer Name", "DIRECTOR TRIN")
-        s_pos = st.text_input("Title", "CHIEF COMMANDER")
-        s_img = st.file_uploader("Digital Seal (PNG)", type=['png'])
-        if st.button("INITIATE ENCRYPTION"):
-            fid = f"SEC-{random.randint(100,999)}"
-            pwd = "123456" # Restored Simple Password
-            m_data = run_orbital_mechanics(sat_obj)
-            st.session_state.pdf_blob = build_archive(sel_sat, st_name, s_name, s_pos, s_img, fid, pwd, m_data)
-            st.session_state.m_id = fid; st.rerun()
+@st.dialog("🔐 SECURITY VERIFICATION")
+def auth_dialog():
+    if not st.session_state.archive:
+        u_name = st.text_input("Officer Name", "AGENT TRIN")
+        u_rank = st.text_input("Designation", "COMMANDER")
+        u_seal = st.file_uploader("Auth Seal (PNG)", type=['png'])
+        if st.button("ENCRYPT DATA"):
+            ref = f"ZNTH-{random.randint(1000,9999)}"
+            pin = "123456"
+            m = calculate_zenith_metrics(assets[target])
+            st.session_state.archive = create_secure_archive(target, node, u_name, u_rank, u_seal, ref, pin, m)
+            st.session_state.ref_id = ref; st.rerun()
     else:
-        st.success(f"ARCHIVE READY: {st.session_state.m_id}")
-        st.download_button("DOWNLOAD PDF", st.session_state.pdf_blob, f"{st.session_state.m_id}.pdf")
-        if st.button("RETURN"): st.session_state.open_sys = False; st.session_state.pdf_blob = None; st.rerun()
+        st.info(f"VERIFIED ID: {st.session_state.ref_id}")
+        st.download_button("DOWNLOAD ENCRYPTED ARCHIVE", st.session_state.archive, f"{st.session_state.ref_id}.pdf")
+        if st.button("DISCONNECT"): 
+            st.session_state.trigger = False; st.session_state.archive = None; st.rerun()
 
-if st.session_state.open_sys: archive_dialog()
+if st.session_state.trigger: auth_dialog()
 
 @st.fragment(run_every=1.0)
-def dashboard():
-    # Real-time Header
-    st.markdown(f'''<div style="text-align:center; background:white; border:5px solid black; padding:10px; border-radius:100px; margin-bottom:20px;">
-                <span style="color:black; font-size:50px; font-weight:900; font-family:monospace;">{datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC</span></div>''', unsafe_allow_html=True)
+def live_dashboard():
+    # Dynamic Digital Clock
+    st.markdown(f'''<div style="background:#000; color:#0f0; padding:15px; border-radius:15px; text-align:center; border:2px solid #333; margin-bottom:20px;">
+                <span style="font-size:45px; font-family:monospace; font-weight:bold;">{datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC</span></div>''', unsafe_allow_html=True)
     
-    m = run_orbital_mechanics(sat_obj)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ALTITUDE", f"{m['ALT_VAL']:,.2f} KM")
-    c2.metric("VELOCITY", f"{m['VEL_VAL']:,.0f} KM/H")
-    c3.metric("COORDINATES", m["COORD"])
+    m = calculate_zenith_metrics(assets[target])
     
-    # RESTORED TRIPLE MAP LAYOUT
-    st.subheader("🌍 GEOSPATIAL COMMAND (TRIPLE VIEW)")
-    m_cols = st.columns(3)
+    # Core Analytics Metrics
+    row1 = st.columns(3)
+    row1[0].metric("ZENITH ALTITUDE", f"{m['ALT']:,.2f} KM")
+    row1[1].metric("ORBITAL VELOCITY", f"{m['VEL']:,.1f} KM/H")
+    row1[2].metric("SUB-SATELLITE PT", f"{m['LAT']:.2f}, {m['LON']:.2f}")
+
+    # Triple Map Logic
+    st.subheader("🌐 MULTI-VECTOR GEOSPATIAL ANALYSIS")
+    maps = st.columns(3)
     
-    def draw_map(lt, ln, zm, k, tl, tn):
+    def generate_map(lt, ln, zm, tag, plat, plon):
         fig = go.Figure()
-        if tl: fig.add_trace(go.Scattermapbox(lat=tl, lon=tn, mode='lines', line=dict(width=3, color='yellow')))
-        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red')))
+        # Drawing the Predicted Projection Path
+        fig.add_trace(go.Scattermapbox(lat=plat, lon=plon, mode='lines', line=dict(width=2, color='cyan')))
+        fig.add_trace(go.Scattermapbox(lat=[lt], lon=[ln], mode='markers', marker=dict(size=15, color='red', symbol='rocket')))
         fig.update_layout(mapbox=dict(style="white-bg", layers=[{"below": 'traces', "sourcetype": "raster", "source": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"]}], center=dict(lat=lt, lon=ln), zoom=zm), margin=dict(l=0,r=0,t=0,b=0), height=380, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True, key=k)
+        st.plotly_chart(fig, use_container_width=True, key=tag)
 
-    with m_cols[0]: draw_map(m['LAT'], m['LON'], z1, "TACTICAL", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[1]: draw_map(m['LAT'], m['LON'], z2, "GLOBAL", m["TAIL_LAT"], m["TAIL_LON"])
-    with m_cols[2]: draw_map(13.75, 100.5, z3, "STATION", [], []) # Fixed Ground Station
+    with maps[0]: generate_map(m['LAT'], m['LON'], z_local, "TACT", m["PROJ_LAT"], m["PROJ_LON"])
+    with maps[1]: generate_map(m['LAT'], m['LON'], z_global, "GLOB", m["PROJ_LAT"], m["PROJ_LON"])
+    with maps[2]: generate_map(13.75, 100.5, z_node, "NODE", [], []) # Centered on Station
 
-    st.subheader("📊 TELEMETRY ARCHIVE (RESTORED 40 PARAMS)")
-    st.table(pd.DataFrame([list(m["RAW_TELE"].items())[i:i+4] for i in range(0, 40, 4)]))
+    # Telemetry Table
+    st.subheader("📋 TELEMETRY DATA GRID")
+    st.table(pd.DataFrame([list(m["INFO"].items())[i:i+4] for i in range(0, 40, 4)]))
 
-if sat_catalog: dashboard()
+if assets: live_dashboard()
